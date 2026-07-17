@@ -60,11 +60,11 @@ views:
             name: Sleep (last night)
             icon: mdi:sleep
           - type: tile
-            entity: sensor.smart_ring_bp_systolic
+            entity: sensor.smart_ring_blood_pressure_systolic
             name: BP systolic
             icon: mdi:heart-plus-outline
           - type: tile
-            entity: sensor.smart_ring_bp_diastolic
+            entity: sensor.smart_ring_blood_pressure_diastolic
             name: BP diastolic
             icon: mdi:heart-minus-outline
           - type: tile
