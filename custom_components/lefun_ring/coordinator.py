@@ -113,15 +113,16 @@ class LefunCoordinator(DataUpdateCoordinator):
         await client.start_notify(NOTIFY_CHAR, self._on_notify)
         self._client = client
         self._connected_at = self.hass.loop.time()
-        # GB sets the ring clock on every connect (fixes step-day attribution) and waits ~1s
-        # before any multi-fetch read, or the ring sometimes won't respond. Ring never ACKs.
+        # NOTE: do NOT set the clock on every connect — on this firmware setting the time
+        # (0x04) appears to reset the current day's step counter, so re-setting it on each
+        # keepalive/poll/sync reconnect was zeroing steps right before we read them. Set the
+        # clock only via the explicit set_time service (call it once; it persists).
         try:
-            await self._command(commands.CMD_TIME, commands.time_payload())
             if self._camera_armed:  # re-arm the shake-for-selfie button after a reconnect
                 await self._command(commands.CMD_REMOTE_CAMERA, commands.camera_mode_payload(True))
         except Exception:  # noqa: BLE001 — best effort
-            _LOGGER.debug("set-time/camera-arm on connect failed (non-fatal)")
-        await asyncio.sleep(1.2)
+            _LOGGER.debug("camera re-arm on connect failed (non-fatal)")
+        await asyncio.sleep(1.0)  # GB waits ~1s before a multi-fetch or the ring may not respond
 
     async def async_disconnect(self) -> None:
         if self._client is not None and self._client.is_connected:
