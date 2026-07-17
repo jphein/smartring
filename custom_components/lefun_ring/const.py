@@ -59,8 +59,17 @@ CONNECT_GRACE = 12.0        # ignore find-phone edges in the first N secs after 
 # the lights) between two adjacent rooms with similar signal.
 ROOM_SWITCH_MARGIN = 8
 
-# Freshness window: a proxy only counts toward "nearest room" if it has heard the ring within this
-# many seconds. This is what makes follow-me responsive — when you leave a room, that room's proxy
-# stops hearing the ring and ages out quickly, instead of its last (strong) reading lingering in
-# HA's advert cache and holding the room. Fed by the real-time advertisement callback.
-FRESH_WINDOW = 15.0
+# Freshness window: a proxy only counts toward "nearest room" if IT has heard the ring within this
+# many seconds (per-scanner discovered_device_timestamps). This is what makes follow-me responsive:
+# when you leave a room, that proxy goes stale and CANNOT hold the room — without this, its last
+# (strong) reading lingers in HA's advert cache for ~3 min and the room sticks. 30s ≈ a couple of
+# advert intervals (the ring advertises ~1/min idle, faster when worn/moving); if no proxy is fresh
+# the last room is held rather than flapping.
+FRESH_WINDOW = 30.0
+
+# Nearest-room scoring: score = rssi - RSSI_AGE_PENALTY * age_seconds. The ring's adverts are
+# caught only ~once a minute per proxy (weak, body-shadowed signal), so recency must weigh as
+# much as strength — a proxy that heard the ring JUST NOW should beat one that heard it a bit
+# louder 20s ago (that's the proxy of the room you just left). 1 dB/s ≈ a 10s-fresher catch
+# outweighs a 10 dBm-louder stale one.
+RSSI_AGE_PENALTY = 1.0

@@ -54,6 +54,7 @@ SENSORS = (
             "proxy": d.get("nearest_proxy"),
             "rssi": d.get("nearest_rssi"),
             "proxies": d.get("proxies") or {},
+            "ages_s": d.get("proxy_ages") or {},  # seconds since each proxy last heard the ring
             "adverts": d.get("advert_count"),
         }),
     LefunSensorDesc("nearest_rssi", "Signal", SIGNAL_STRENGTH_DECIBELS_MILLIWATT,

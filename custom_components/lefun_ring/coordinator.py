@@ -21,7 +21,8 @@ from homeassistant.util import dt as dt_util
 
 from .const import (CONNECT_GRACE, CTRL_CHAR, DOMAIN, EVENT_BUTTON, FINDPHONE_GAP,
                     FRESH_WINDOW, KEEPALIVE, NOTIFY_CHAR, POLL_EVERY, PROXY_ROOM_OVERRIDES,
-                    ROOM_SWITCH_MARGIN, SERVICE_UUID, UPDATE_INTERVAL_SECONDS)
+                    ROOM_SWITCH_MARGIN, RSSI_AGE_PENALTY, SERVICE_UUID,
+                    UPDATE_INTERVAL_SECONDS)
 from .proto import commands
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,8 +70,6 @@ class LefunCoordinator(DataUpdateCoordinator):
         self._last_proxy: Optional[str] = None
         self._last_rssi: Optional[int] = None
         self._bt_unsub = None  # real-time advertisement callback (responsive room tracking)
-        self._proxy_seen: dict[str, tuple[int, float]] = {}  # proxy name -> (rssi, monotonic ts)
-        self._scanner_names: dict[str, str] = {}  # scanner source (MAC) -> friendly name
         self._advert_count = 0  # diagnostic: how many adverts the callback has delivered
 
     # ---------------------------------------------------------------- connection
@@ -358,31 +357,46 @@ class LefunCoordinator(DataUpdateCoordinator):
         cache if the real-time callback hasn't delivered anything (keeps working if it's quiet).
         Hysteresis (ROOM_SWITCH_MARGIN) then avoids flip-flopping between adjacent rooms."""
         now = self.hass.loop.time()
-        self._proxy_seen = {n: (r, t) for n, (r, t) in self._proxy_seen.items()
-                            if now - t < FRESH_WINDOW}
-        proxies: dict = {n: r for n, (r, t) in self._proxy_seen.items()}
-        if not proxies:  # fallback: real-time callback quiet -> use the (possibly stale) cache
-            for sd in bluetooth.async_scanner_devices_by_address(self.hass, self.address, False):
-                adv = sd.advertisement
-                if adv is not None and adv.rssi is not None:
-                    proxies[sd.scanner.name or sd.scanner.source] = adv.rssi
+        proxies: dict[str, int] = {}   # every proxy with the ring in its cache -> last rssi
+        ages: dict[str, float] = {}    # proxy -> seconds since IT last heard the ring
+        for sd in bluetooth.async_scanner_devices_by_address(self.hass, self.address, False):
+            adv = sd.advertisement
+            if adv is None or adv.rssi is None:
+                continue
+            name = sd.scanner.name or sd.scanner.source
+            proxies[name] = adv.rssi
+            # habluetooth keeps a per-scanner last-heard monotonic timestamp. This is the ground
+            # truth: HA's advert cache retains a proxy's LAST reading for minutes after it stops
+            # hearing the ring, and comparing a fresh weak reading against a stale strong one is
+            # exactly what left the room "stuck" on the old proxy.
+            ts = getattr(sd.scanner, "discovered_device_timestamps", {}).get(self.address)
+            if ts is not None:
+                ages[name] = now - ts
 
-        nearest_name = nearest_rssi = None
-        for name, rssi in proxies.items():
-            if nearest_rssi is None or rssi > nearest_rssi:
-                nearest_rssi, nearest_name = rssi, name
+        fresh = {n: r for n, r in proxies.items() if ages.get(n, 1e9) < FRESH_WINDOW}
+        if proxies and not ages:  # habluetooth without timestamps: degrade to cache-only
+            fresh = dict(proxies)
+
+        # Score = rssi - penalty*age: the ring's adverts are caught only ~once/min per proxy,
+        # so a proxy that heard the ring JUST NOW must beat one that heard it a bit louder 20s
+        # ago — that older reading is usually the room being left.
+        def score(name: str) -> float:
+            return fresh[name] - RSSI_AGE_PENALTY * ages.get(name, 0.0)
 
         data["advert_count"] = self._advert_count
+        data["proxy_ages"] = {n: round(a, 1) for n, a in ages.items()}
         prev_room = data.get("room")
         connected = self._client is not None and self._client.is_connected
-        if proxies:
-            # Hysteresis: keep the currently-held proxy unless a different one is clearly
-            # stronger (>= ROOM_SWITCH_MARGIN dBm), so adjacent rooms don't flicker the lights.
-            chosen_name, chosen_rssi = nearest_name, nearest_rssi
-            if self._last_proxy in proxies and nearest_name != self._last_proxy:
-                held_rssi = proxies[self._last_proxy]
-                if nearest_rssi - held_rssi < ROOM_SWITCH_MARGIN:
-                    chosen_name, chosen_rssi = self._last_proxy, held_rssi
+        if fresh:
+            nearest_name = max(fresh, key=score)
+            # Hysteresis: keep the currently-held proxy unless a different one clearly wins
+            # (score margin) — but ONLY while the held proxy still hears the ring. A stale
+            # proxy can't hold the room, whatever its last reading was.
+            chosen_name = nearest_name
+            if self._last_proxy in fresh and nearest_name != self._last_proxy:
+                if score(nearest_name) - score(self._last_proxy) < ROOM_SWITCH_MARGIN:
+                    chosen_name = self._last_proxy
+            chosen_rssi = fresh[chosen_name]
             self._last_room = proxy_to_room(chosen_name)
             self._last_proxy, self._last_rssi = chosen_name, chosen_rssi
             data["nearest_proxy"] = chosen_name
@@ -390,13 +404,15 @@ class LefunCoordinator(DataUpdateCoordinator):
             data["nearest_rssi"] = chosen_rssi
             data["proxies"] = proxies
             data["last_seen"] = dt_util.utcnow()  # heard now -> stamp; carries over when away
-        elif connected:
-            # A connected BLE device stops advertising, so the advert cache is empty even
-            # though we're clearly in range. Keep the last-known room instead of "away".
-            data["room"] = self._last_room or "connected"
+        elif proxies or connected:
+            # No proxy heard the ring within FRESH_WINDOW — it's between adverts (it advertises
+            # ~1/min when idle) or holding a connection (connected devices don't advertise).
+            # Hold the last-known room; "away" comes when the caches empty out entirely.
+            data["room"] = self._last_room or ("connected" if connected else "unknown")
             data["nearest_proxy"] = self._last_proxy
             data["nearest_rssi"] = self._last_rssi
-            data["proxies"] = {self._last_proxy: self._last_rssi} if self._last_proxy else {}
+            data["proxies"] = proxies or (
+                {self._last_proxy: self._last_rssi} if self._last_proxy else {})
         else:
             data["nearest_proxy"] = None
             data["room"] = "away"
@@ -419,22 +435,12 @@ class LefunCoordinator(DataUpdateCoordinator):
             self._bt_unsub()
             self._bt_unsub = None
 
-    def _resolve_scanner_name(self, source: str) -> str:
-        """Map a scanner source (usually the proxy's MAC) to its friendly name, cached."""
-        if source not in self._scanner_names:
-            for sd in bluetooth.async_scanner_devices_by_address(self.hass, self.address, False):
-                self._scanner_names[sd.scanner.source] = sd.scanner.name or sd.scanner.source
-        return self._scanner_names.get(source, source)
-
     @callback
-    def _on_advertisement(self, service_info, _change) -> None:
-        """Every advertisement a proxy hears: record which proxy heard it (with a timestamp) so
-        _recompute_location can pick the freshest-nearest room, then push if the room changed."""
+    def _on_advertisement(self, _service_info, _change) -> None:
+        """A proxy heard the ring: recompute the room right away (don't wait for the tick).
+        NB: HA fires this only for its preferred source, so per-proxy freshness comes from the
+        scanners' discovered_device_timestamps in _recompute_location, not from this callback."""
         self._advert_count += 1
-        rssi = getattr(service_info, "rssi", None)
-        if rssi is not None:
-            name = self._resolve_scanner_name(getattr(service_info, "source", ""))
-            self._proxy_seen[name] = (rssi, self.hass.loop.time())
         data = dict(self.data or {})
         if self._recompute_location(data):
             self.async_set_updated_data(data)
