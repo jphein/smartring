@@ -35,6 +35,11 @@ SENSORS = (
                     SensorStateClass.MEASUREMENT, None, "mdi:heart-pulse"),
     LefunSensorDesc("spo2", "SpO₂", PERCENTAGE, None,
                     SensorStateClass.MEASUREMENT, None, "mdi:lungs"),
+    # Blood pressure — experimental cuff-less PPG estimate, on-demand (measure_blood_pressure).
+    LefunSensorDesc("bp_systolic", "Blood pressure (systolic)", "mmHg", None,
+                    SensorStateClass.MEASUREMENT, None, "mdi:heart-plus-outline"),
+    LefunSensorDesc("bp_diastolic", "Blood pressure (diastolic)", "mmHg", None,
+                    SensorStateClass.MEASUREMENT, None, "mdi:heart-minus-outline"),
     LefunSensorDesc("battery", "Battery", PERCENTAGE, SensorDeviceClass.BATTERY,
                     SensorStateClass.MEASUREMENT, EntityCategory.DIAGNOSTIC, "mdi:ring"),
     LefunSensorDesc("steps", "Steps", "steps", None,

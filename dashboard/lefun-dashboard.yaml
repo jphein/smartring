@@ -11,6 +11,8 @@ views:
         content: |
           ## 💍 Lefun Smart Ring
           Live vitals and **room tracking** by nearest BLE proxy.
+          _HR/SpO₂/BP read only while worn (tap the measure buttons). Blood pressure is a
+          cuff-less PPG **estimate** — indicative, not a medical reading._
       - type: grid
         columns: 2
         square: false
@@ -58,6 +60,14 @@ views:
             name: Sleep (last night)
             icon: mdi:sleep
           - type: tile
+            entity: sensor.smart_ring_bp_systolic
+            name: BP systolic
+            icon: mdi:heart-plus-outline
+          - type: tile
+            entity: sensor.smart_ring_bp_diastolic
+            name: BP diastolic
+            icon: mdi:heart-minus-outline
+          - type: tile
             entity: sensor.smart_ring_firmware
             name: Firmware
             icon: mdi:chip
@@ -94,6 +104,13 @@ views:
             tap_action:
               action: perform-action
               perform_action: lefun_ring.measure_spo2
+              data: {}
+          - type: button
+            name: Measure BP
+            icon: mdi:heart-pulse
+            tap_action:
+              action: perform-action
+              perform_action: lefun_ring.measure_blood_pressure
               data: {}
           - type: button
             name: Find ring
