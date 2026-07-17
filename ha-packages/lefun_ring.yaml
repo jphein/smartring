@@ -104,9 +104,11 @@ automation:
     mode: queued
     max_exceeded: silent
     triggers:
-      # Room changed (fires within a second or two via the coordinator's real-time advert callback).
+      # Room changed. not_to also filters out attribute-only updates (the sensor's ages/rssi
+      # attrs refresh every 15s tick — without this the automation re-fires each tick).
       - trigger: state
         entity_id: sensor.smart_ring_location
+        not_to: ["unknown", "unavailable"]
       # Master just enabled -> light up whatever room the ring is currently in.
       - trigger: state
         entity_id: input_boolean.ring_follow_lights
@@ -127,39 +129,35 @@ automation:
             bedroom-ble-proxy: bedroom
             shed-ble-proxy: shed
             lunas-room-ble-proxy: luna_s_room
+          follow_areas: [laundry, kitchen, bedroom, luna_s_room, shed]
       - variables:
           new_proxy: "{{ (state_attr('sensor.smart_ring_location','proxy') or '').split(' (')[0] }}"
-          old_proxy: >-
-            {{ ((trigger.from_state.attributes.proxy
-                 if (trigger.from_state is not none
-                     and trigger.entity_id == 'sensor.smart_ring_location')
-                 else none) or '').split(' (')[0] }}
       - variables:
           new_area: >-
             {% set dev = device_id(new_proxy) if new_proxy else none %}
             {{ proxy_area.get(new_proxy, area_id(dev) if dev else none) }}
-          old_area: >-
-            {% set dev = device_id(old_proxy) if old_proxy else none %}
-            {{ proxy_area.get(old_proxy, area_id(dev) if dev else none) }}
-      # Turn OFF the room we left — only when moving to a DIFFERENT real room whose toggle is on.
-      # (Going to "away"/unknown leaves lights alone, so sitting still — the ring sleeps — is safe.)
+      # Only act on a real room fix ("away"/unknown leaves lights alone, so sitting still —
+      # the ring sleeps and goes quiet — is safe).
+      - condition: template
+        value_template: "{{ new_area not in [none, ''] }}"
+      # Reconcile: turn OFF every OTHER enabled follow-me room, not just the one we came from.
+      # Self-healing — if a transition was missed (HA restart, reloads), the stale room gets
+      # cleaned up on the next trigger instead of staying lit forever.
+      - repeat:
+          for_each: "{{ follow_areas }}"
+          sequence:
+            - condition: template
+              value_template: >-
+                {{ repeat.item != new_area
+                   and is_state('input_boolean.ring_follow_' ~ repeat.item, 'on') }}
+            - action: script.ring_set_room_lights
+              data:
+                area: "{{ repeat.item }}"
+                turn: "off"
+      # Turn ON the room the ring is in — if its toggle is on.
       - if:
           - condition: template
-            value_template: >-
-              {{ old_area not in [none, ''] and new_area not in [none, '']
-                 and old_area != new_area
-                 and is_state('input_boolean.ring_follow_' ~ old_area, 'on') }}
-        then:
-          - action: script.ring_set_room_lights
-            data:
-              area: "{{ old_area }}"
-              turn: "off"
-      # Turn ON the room we entered — if its toggle is on.
-      - if:
-          - condition: template
-            value_template: >-
-              {{ new_area not in [none, '']
-                 and is_state('input_boolean.ring_follow_' ~ new_area, 'on') }}
+            value_template: "{{ is_state('input_boolean.ring_follow_' ~ new_area, 'on') }}"
         then:
           - action: script.ring_set_room_lights
             data:
