@@ -218,32 +218,36 @@ class LefunCoordinator(DataUpdateCoordinator):
         Returns the parsed result dict ({value, extra}) or None. The 0x0F response is only a
         start-ack; the real reading arrives ~15-30s later in a 0x10 frame (<ppgType><value>).
         Requires the ring to be worn (finger on the sensor)."""
-        while not self._notifies.empty():
-            self._notifies.get_nowait()
-        await self._command(commands.CMD_PPG_START, commands.ppg_start_payload(ppg_type))
-        loop = self.hass.loop
-        deadline = loop.time() + window
         seen: list[str] = []
         result = None
-        while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                break
-            try:
-                frame = await asyncio.wait_for(self._notifies.get(), remaining)
-            except asyncio.TimeoutError:
-                break
-            p = commands.parse_packet(frame)
-            if not p or p[0] == commands.CMD_FIND_PHONE:
-                continue                                    # skip the ~1/s heartbeat
-            seen.append(frame.hex(" "))
-            if p[0] == commands.CMD_PPG_RESULT:
-                r = commands.parse_ppg_result(p[1])
-                if r and r["value"]:
-                    result = r
+        try:
+            while not self._notifies.empty():
+                self._notifies.get_nowait()
+            await self._command(commands.CMD_PPG_START, commands.ppg_start_payload(ppg_type))
+            loop = self.hass.loop
+            deadline = loop.time() + window
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
                     break
+                try:
+                    frame = await asyncio.wait_for(self._notifies.get(), remaining)
+                except asyncio.TimeoutError:
+                    break
+                p = commands.parse_packet(frame)
+                if not p or p[0] == commands.CMD_FIND_PHONE:
+                    continue                                # skip the ~1/s heartbeat
+                seen.append(frame.hex(" "))
+                if p[0] == commands.CMD_PPG_RESULT:
+                    r = commands.parse_ppg_result(p[1])
+                    if r and r["value"]:
+                        result = r
+                        break
+        except Exception as err:  # noqa: BLE001 — ring often drops mid-measure; never crash
+            seen.append(f"ERROR {type(err).__name__}: {err}")
+            self._client = None
         self._ppg_debug = seen[-15:]                        # surfaced for diagnosis
-        return result["value"]
+        return result                                        # dict {value, extra} or None
 
     # ---------------------------------------------------------------- operations
     async def set_time(self, when: Optional[datetime] = None) -> None:
