@@ -48,11 +48,14 @@ HEADER_LEN = 4  # preamble + length + command + checksum
 CMD_DEVICE_INFO = 0x00
 CMD_BATTERY = 0x03
 CMD_TIME = 0x04
-CMD_HR_START = 0x0F
-CMD_HR_RESULT = 0x10
+CMD_HR_START = 0x0F      # PPG start; param = ppgType bitmask (1 << type). Response = start-ack.
+CMD_HR_RESULT = 0x10     # PPG result <ppgType><value>, arrives ~15-30s after start
 CMD_STEPS = 0x12
 CMD_ACTIVITY = 0x13
 CMD_SLEEP = 0x15
+
+PPG_TYPE_HEART_RATE = 0
+PPG_TYPE_BLOOD_OXYGEN = 1
 
 CMD_NAMES = {v: k for k, v in globals().items() if k.startswith("CMD_")}
 
@@ -262,11 +265,16 @@ class LefunRing:
             self._apply(state, CMD_STEPS, await self.async_command(CMD_STEPS, bytes([0])))
         return state
 
-    async def async_heart_rate(self, timeout: float = 20.0) -> RingState:
-        """Trigger a live PPG measurement and wait for the result frame."""
+    async def async_heart_rate(self, timeout: float = 30.0) -> RingState:
+        """Start a typed HR measurement (0x0F + ppgType) and wait for the 0x10 result.
+
+        The 0x0F response is only a start-ack; the BPM arrives ~15-30s later in a 0x10
+        frame. Requires the ring to be worn. Sending 0x0F WITHOUT the ppgType byte returns
+        success=0 and never measures (the old 'always 77' bug)."""
         state = RingState(address=self._device.address)
-        frames = await self.async_command(CMD_HR_START, collect=timeout)
-        self._apply(state, CMD_HR_START, frames)
+        frames = await self.async_command(
+            CMD_HR_START, bytes([1 << PPG_TYPE_HEART_RATE]), collect=timeout)
+        self._apply(state, CMD_HR_RESULT, frames)
         return state
 
     def _apply(self, state: RingState, cmd: int, frames: list[bytes]) -> None:
@@ -300,8 +308,9 @@ class LefunRing:
                     state.steps = (state.steps or 0) + int.from_bytes(params[8:10], "big")
                     state.distance_m = (state.distance_m or 0) + int.from_bytes(params[10:12], "big")
                     state.calories = (state.calories or 0) + int.from_bytes(params[12:14], "big")
-            elif rcmd in (CMD_HR_RESULT, CMD_HR_START) and params:
-                state.heart_rate = params[-1] if params[-1] else (params[0] or None)
+            elif rcmd == CMD_HR_RESULT and len(params) >= 2:
+                # 0x10 result: <ppgType><value>. 0x0F is only a start-ack, never a reading.
+                state.heart_rate = params[1] or None
             elif rcmd == CMD_DEVICE_INFO and params:
                 state.raw["device_info"] = params.hex(" ")
 

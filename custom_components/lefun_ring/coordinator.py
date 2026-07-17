@@ -144,6 +144,30 @@ class LefunCoordinator(DataUpdateCoordinator):
                 frames.append(parsed[1])
         return frames
 
+    async def _measure_ppg(self, ppg_type: int, window: float = 30.0) -> Optional[int]:
+        """Start a typed PPG measurement (0x0F + ppgType) and wait for the 0x10 result value.
+
+        The 0x0F response is only a start-ack; the real reading arrives ~15-30s later in a
+        0x10 frame (<ppgType><value>). Requires the ring to be worn (finger on the sensor)."""
+        while not self._notifies.empty():
+            self._notifies.get_nowait()
+        await self._command(commands.CMD_PPG_START, commands.ppg_start_payload(ppg_type))
+        loop = self.hass.loop
+        deadline = loop.time() + window
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return None
+            try:
+                frame = await asyncio.wait_for(self._notifies.get(), remaining)
+            except asyncio.TimeoutError:
+                return None
+            parsed = commands.parse_packet(frame)
+            if parsed and parsed[0] == commands.CMD_PPG_RESULT:
+                r = commands.parse_ppg_result(parsed[1])
+                if r and r["value"]:
+                    return r["value"]
+
     # ---------------------------------------------------------------- operations
     async def set_time(self, when: Optional[datetime] = None) -> None:
         async with self._lock:
@@ -156,11 +180,10 @@ class LefunCoordinator(DataUpdateCoordinator):
             await self._ensure_connected()
             await self._command(commands.CMD_FIND_DEVICE)
 
-    async def measure_heart_rate(self, timeout: float = 25.0) -> Optional[int]:
+    async def measure_heart_rate(self, timeout: float = 30.0) -> Optional[int]:
         async with self._lock:
             await self._ensure_connected()
-            params = await self._command_with_response(commands.CMD_HR_START, timeout=timeout)
-        hr = commands.parse_hr(params) if params else None
+            hr = await self._measure_ppg(commands.PPG_TYPE_HEART_RATE, window=timeout)
         if hr:
             self.async_set_updated_data({**(self.data or {}), "heart_rate": hr})
         return hr
@@ -212,10 +235,9 @@ class LefunCoordinator(DataUpdateCoordinator):
                                      "distance_m": day["distance_m"],
                                      "calories": day["calories"],
                                      "steps_date": day["date"]})
-                    hr = await self._command_with_response(commands.CMD_HR_START, timeout=25.0)
-                    hrv = commands.parse_hr(hr) if hr else None
-                    if hrv:
-                        data["heart_rate"] = hrv
+                    hr = await self._measure_ppg(commands.PPG_TYPE_HEART_RATE, window=25.0)
+                    if hr:
+                        data["heart_rate"] = hr
                 except Exception as err:  # noqa: BLE001 - a flaky/failed BLE poll must never
                     # fail the coordinator; location still updates and sensors keep last value.
                     _LOGGER.debug("connected poll skipped: %s", err)

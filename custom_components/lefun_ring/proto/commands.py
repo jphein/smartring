@@ -19,11 +19,18 @@ CMD_BATTERY = 0x03
 CMD_TIME = 0x04
 CMD_FIND_DEVICE = 0x09   # buzz the ring
 CMD_FIND_PHONE = 0x0A    # device->host "find my phone" (the unsolicited push we see)
-CMD_HR_START = 0x0F      # start a PPG/heart-rate measurement
-CMD_HR_RESULT = 0x10
+CMD_PPG_START = 0x0F     # start a PPG measurement; param = ppgType bitmask (1 << type)
+CMD_PPG_RESULT = 0x10    # result frame: <ppgType><data...> (arrives ~15-30s after start)
+CMD_HR_START = CMD_PPG_START  # back-compat aliases
+CMD_HR_RESULT = CMD_PPG_RESULT
 CMD_STEPS = 0x12         # takes a 1-byte "days ago" param (0 = today)
 CMD_ACTIVITY = 0x13
 CMD_SLEEP = 0x15
+
+# PPG measurement types (Gadgetbridge LefunConstants.PPG_TYPE_*); request param = 1 << type.
+PPG_TYPE_HEART_RATE = 0
+PPG_TYPE_BLOOD_OXYGEN = 1
+PPG_TYPE_BLOOD_PRESSURE = 2
 
 OP_GET = 0
 OP_SET = 1
@@ -67,11 +74,28 @@ def parse_battery(params: bytes) -> Optional[int]:
     return params[0] if params else None
 
 
-def parse_hr(params: bytes) -> Optional[int]:
-    """HR-start/result payload; the BPM is the first nonzero byte (0 = still measuring)."""
-    if not params:
+def ppg_start_payload(ppg_type: int = PPG_TYPE_HEART_RATE) -> bytes:
+    """0x0F request param: the ppgType BITMASK (1 << type). Without it the ring returns
+    a start-ack with success=0 and never measures — that was the old 'always 77' bug."""
+    return bytes([1 << ppg_type])
+
+
+def parse_ppg_result(params: bytes) -> Optional[dict]:
+    """Parse a 0x10 CMD_PPG_RESULT frame: <ppgType><data...>. HR/SpO2 data is 1 byte,
+    blood-pressure 2. Returns {type_bit, value} where value is the reading (BPM / SpO2 %).
+
+    NB: the 0x0F response is only a start-ack (<ppgType><success>), NOT a reading — parse
+    the 0x10 result instead."""
+    if len(params) < 2:
         return None
-    return params[0] or (params[-1] or None)
+    return {"type_bit": params[0], "value": params[1],
+            "extra": params[2] if len(params) > 2 else None}
+
+
+def parse_hr(params: bytes) -> Optional[int]:
+    """Heart-rate BPM from a 0x10 result frame (<ppgType><bpm>). None if still measuring/empty."""
+    r = parse_ppg_result(params)
+    return (r["value"] or None) if r else None
 
 
 def parse_steps(params: bytes) -> Optional[dict]:
