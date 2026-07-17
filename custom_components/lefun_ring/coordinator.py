@@ -420,13 +420,9 @@ class LefunCoordinator(DataUpdateCoordinator):
                             data["firmware"] = di["software_version"]
                             data["model_code"] = di["type_code"]
                             data["vendor_code"] = di["vendor_code"]
-                    hr = await self._measure_ppg(commands.PPG_TYPE_HEART_RATE, window=30.0)
-                    if hr:
-                        data["heart_rate"] = hr["value"]
-                    data["ppg_debug"] = self._ppg_debug     # diagnosis: raw PPG frames
-                    spo2 = await self._measure_ppg(commands.PPG_TYPE_BLOOD_OXYGEN, window=30.0)
-                    if spo2:
-                        data["spo2"] = spo2["value"]
+                    # HR/SpO2 are NOT auto-measured here — each is a ~30s PPG measurement that
+                    # would make every poll (and first-refresh setup) crawl and drain the ring.
+                    # They're on-demand only (measure_heart_rate / measure_spo2 services/buttons).
                     night = commands.summarize_sleep(
                         await self._command_collect(commands.CMD_SLEEP, bytes([0])))
                     if night:
