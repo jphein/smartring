@@ -1,0 +1,32 @@
+set_time:
+  name: Set time
+  description: Sync the ring's clock to Home Assistant's time (fixes step-day attribution).
+  fields:
+    device_id:
+      name: Ring
+      description: Which ring (optional if only one is configured).
+      selector:
+        device:
+          integration: lefun_ring
+
+find:
+  name: Find ring
+  description: Buzz the ring to locate it.
+  fields:
+    device_id:
+      name: Ring
+      description: Which ring (optional if only one is configured).
+      selector:
+        device:
+          integration: lefun_ring
+
+measure_heart_rate:
+  name: Measure heart rate
+  description: Trigger an on-demand heart-rate measurement and update the sensor (~20s).
+  fields:
+    device_id:
+      name: Ring
+      description: Which ring (optional if only one is configured).
+      selector:
+        device:
+          integration: lefun_ring

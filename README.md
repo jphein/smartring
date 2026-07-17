@@ -95,14 +95,23 @@ valid Lefun frame — preamble `0x5b` (device→host push variant), command
 `0x0a = CMD_FIND_PHONE`. The ring is repeating its "find my phone" signal because
 nothing acknowledges it. Not sensor data.
 
+## Home Assistant integration
+
+`custom_components/lefun_ring/` is a full HA custom component (modelled on the `moyoung`
+integration): it runs the Lefun protocol through your **existing** ESPHome Bluetooth proxies
+(no new/modified proxy needed) and exposes heart-rate, battery, steps, distance, calories, and
+nearest-proxy **location** sensors, plus `set_time` / `find` / `measure_heart_rate` services.
+Copy it into HA's `config/custom_components/`, restart, and add the "Lefun Smart Ring" integration.
+A ready Lovelace dashboard is in `dashboard/lefun-dashboard.yaml`. See the component's README.
+
 ## Status
 
 - [x] Bonded connect via `establish_connection` (+ `close_stale_connections`)
 - [x] Device info, battery, live heart rate
-- [x] Steps / activity / sleep reachable (day-index param; parse WIP — read ~0 until worn)
-- [x] Decoded the `5b … 0a` broadcast → `CMD_FIND_PHONE`
-- [ ] Finish steps/activity/sleep field parsing (validate while wearing the ring)
-- [ ] HA custom component wrapper (DataUpdateCoordinator)
+- [x] Steps / activity / sleep parse (day-index param, big-endian; date verified live)
+- [x] Set-time (`CMD_TIME`); decoded the `5b … 0a` broadcast → `CMD_FIND_PHONE`
+- [x] HA custom component (coordinator + sensors + services) and dashboard
+- [ ] Validate step *counts* accumulate (ring suspends its pedometer while actively polled)
 
 ## Known quirk
 

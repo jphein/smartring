@@ -1,0 +1,20 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "confirm": {
+        "description": "Set up the Lefun ring {name} ({address})?"
+      },
+      "user": {
+        "description": "Select a Lefun ring seen by a Bluetooth proxy, or enter its MAC.",
+        "data": {
+          "address": "Ring"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This ring is already configured.",
+      "no_devices_found": "No Lefun ring found. Make sure it's worn/awake and in range of a Bluetooth proxy with active connections."
+    }
+  }
+}
