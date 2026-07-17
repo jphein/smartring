@@ -15,12 +15,13 @@ from bleak import BleakClient
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import close_stale_connections, establish_connection
 from homeassistant.components import bluetooth
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
 
 from .const import (CONNECT_GRACE, CTRL_CHAR, DOMAIN, EVENT_BUTTON, FINDPHONE_GAP,
-                    KEEPALIVE, NOTIFY_CHAR, POLL_EVERY, PROXY_ROOM_OVERRIDES,
-                    SERVICE_UUID, UPDATE_INTERVAL_SECONDS)
+                    FRESH_WINDOW, KEEPALIVE, NOTIFY_CHAR, POLL_EVERY, PROXY_ROOM_OVERRIDES,
+                    ROOM_SWITCH_MARGIN, SERVICE_UUID, UPDATE_INTERVAL_SECONDS)
 from .proto import commands
 
 _LOGGER = logging.getLogger(__name__)
@@ -67,7 +68,10 @@ class LefunCoordinator(DataUpdateCoordinator):
         self._last_room: Optional[str] = None
         self._last_proxy: Optional[str] = None
         self._last_rssi: Optional[int] = None
-        self._ppg_debug: list[str] = []  # last measurement's frames, surfaced for diagnosis
+        self._bt_unsub = None  # real-time advertisement callback (responsive room tracking)
+        self._proxy_seen: dict[str, tuple[int, float]] = {}  # proxy name -> (rssi, monotonic ts)
+        self._scanner_names: dict[str, str] = {}  # scanner source (MAC) -> friendly name
+        self._advert_count = 0  # diagnostic: how many adverts the callback has delivered
 
     # ---------------------------------------------------------------- connection
     def _on_disconnect(self, _client: BleakClient) -> None:
@@ -226,7 +230,6 @@ class LefunCoordinator(DataUpdateCoordinator):
         Returns the parsed result dict ({value, extra}) or None. The 0x0F response is only a
         start-ack; the real reading arrives ~15-30s later in a 0x10 frame (<ppgType><value>).
         Requires the ring to be worn (finger on the sensor)."""
-        seen: list[str] = []
         result = None
         try:
             while not self._notifies.empty():
@@ -245,7 +248,6 @@ class LefunCoordinator(DataUpdateCoordinator):
                 p = commands.parse_packet(frame)
                 if not p or p[0] == commands.CMD_FIND_PHONE:
                     continue                                # skip the ~1/s heartbeat
-                seen.append(frame.hex(" "))
                 if p[0] == commands.CMD_PPG_RESULT:
                     r = commands.parse_ppg_result(p[1])
                     # only accept a result of the type we asked for — during e.g. a BP measure
@@ -255,9 +257,8 @@ class LefunCoordinator(DataUpdateCoordinator):
                         result = r
                         break
         except Exception as err:  # noqa: BLE001 — ring often drops mid-measure; never crash
-            seen.append(f"ERROR {type(err).__name__}: {err}")
+            _LOGGER.debug("PPG measure failed: %s", err)
             self._client = None
-        self._ppg_debug = seen[-15:]                        # surfaced for diagnosis
         return result                                        # dict {value, extra} or None
 
     # ---------------------------------------------------------------- operations
@@ -292,7 +293,7 @@ class LefunCoordinator(DataUpdateCoordinator):
             await self._ensure_connected()
             r = await self._measure_ppg(commands.PPG_TYPE_HEART_RATE, window=timeout)
         hr = r["value"] if r else None
-        nd = {**(self.data or {}), "ppg_debug": self._ppg_debug}  # always surface frames
+        nd = dict(self.data or {})
         if hr:
             nd["heart_rate"] = hr
         self.async_set_updated_data(nd)
@@ -303,31 +304,28 @@ class LefunCoordinator(DataUpdateCoordinator):
             await self._ensure_connected()
             r = await self._measure_ppg(commands.PPG_TYPE_BLOOD_OXYGEN, window=timeout)
         spo2 = r["value"] if r else None
-        nd = {**(self.data or {}), "ppg_debug": self._ppg_debug}
+        nd = dict(self.data or {})
         if spo2:
             nd["spo2"] = spo2
         self.async_set_updated_data(nd)
         return spo2
 
     async def measure_blood_pressure(self, timeout: float = 45.0) -> Optional[dict]:
-        """Experimental: cuff-less PPG estimate — systolic/diastolic. Treat as indicative only."""
+        """Experimental: cuff-less PPG estimate. This ring reports a SINGLE pressure value
+        (~systolic); its 0x10 BP frame has no diastolic byte. Treat as indicative only."""
         async with self._lock:
             await self._ensure_connected()
             r = await self._measure_ppg(commands.PPG_TYPE_BLOOD_PRESSURE, window=timeout)
-        nd = {**(self.data or {}), "ppg_debug": self._ppg_debug}
-        if r:
-            nd["bp_systolic"], nd["bp_diastolic"] = r["value"], r.get("extra")
-        self.async_set_updated_data(nd)
         if not r:
             return None
-        bp = {"systolic": r["value"], "diastolic": r.get("extra")}
-        return bp
+        self.async_set_updated_data({**(self.data or {}), "bp_systolic": r["value"]})
+        return {"systolic": r["value"]}
 
     async def async_sync(self) -> dict:
         """On-demand connected read of battery + steps/activity (manual refresh + diagnosis).
 
         Steps are stored on the ring, so this works whenever it's connected — no need to
-        catch it right after a walk. Captures the raw 0x13/0x12 frames into steps_debug."""
+        catch it right after a walk."""
         data = dict(self.data or {})
         async with self._lock:
             try:
@@ -336,51 +334,62 @@ class LefunCoordinator(DataUpdateCoordinator):
                 if bat is not None:
                     data["battery"] = commands.parse_battery(bat)
                 buckets = await self._command_collect(commands.CMD_ACTIVITY, bytes([0]))
-                dbg = [b.hex(" ") for b in buckets][:20]
                 day = commands.sum_activity(buckets)
-                summary = await self._command_with_response(commands.CMD_STEPS, bytes([0]))
-                if summary:
-                    dbg.append("0x12:" + summary.hex(" "))
-                    if day is None:
+                if day is None:
+                    summary = await self._command_with_response(commands.CMD_STEPS, bytes([0]))
+                    if summary:
                         day = commands.parse_steps(summary)
-                data["steps_debug"] = dbg
                 if day:
                     data.update({"steps": day["steps"], "distance_m": day["distance_m"],
                                  "calories": day["calories"], "steps_date": day["date"]})
             except Exception as err:  # noqa: BLE001 — never crash the service
-                data["steps_debug"] = [f"ERROR {type(err).__name__}: {err}"]
+                _LOGGER.debug("sync failed: %s", err)
                 self._client = None
         self.async_set_updated_data(data)
         return data
 
-    # ---------------------------------------------------------------- sensor poll
-    async def _async_update_data(self) -> dict:
-        """Every tick: recompute location from the advert cache (no connection). Battery/steps/HR
-        (which need a connection) are refreshed only every POLL_EVERY ticks."""
-        data = dict(self.data or {})
+    # ---------------------------------------------------------------- room tracking
+    def _recompute_location(self, data: dict) -> bool:
+        """Fill ``data``'s location fields and return True if the room changed.
 
-        # --- location: which proxy hears the ring, and how strongly ---
-        nearest_name: Optional[str] = None
-        nearest_rssi: Optional[int] = None
-        proxies: dict = {}
-        for sd in bluetooth.async_scanner_devices_by_address(self.hass, self.address, False):
-            adv = sd.advertisement
-            rssi = adv.rssi if adv is not None else None
-            if rssi is None:
-                continue
-            name = sd.scanner.name or sd.scanner.source
-            proxies[name] = rssi
+        "Nearest room" is chosen only among proxies that have heard the ring within FRESH_WINDOW
+        (tracked in real time by ``_on_advertisement``) — so a room you just left ages out fast
+        instead of its stale-but-strong reading holding the lights. Falls back to HA's advert
+        cache if the real-time callback hasn't delivered anything (keeps working if it's quiet).
+        Hysteresis (ROOM_SWITCH_MARGIN) then avoids flip-flopping between adjacent rooms."""
+        now = self.hass.loop.time()
+        self._proxy_seen = {n: (r, t) for n, (r, t) in self._proxy_seen.items()
+                            if now - t < FRESH_WINDOW}
+        proxies: dict = {n: r for n, (r, t) in self._proxy_seen.items()}
+        if not proxies:  # fallback: real-time callback quiet -> use the (possibly stale) cache
+            for sd in bluetooth.async_scanner_devices_by_address(self.hass, self.address, False):
+                adv = sd.advertisement
+                if adv is not None and adv.rssi is not None:
+                    proxies[sd.scanner.name or sd.scanner.source] = adv.rssi
+
+        nearest_name = nearest_rssi = None
+        for name, rssi in proxies.items():
             if nearest_rssi is None or rssi > nearest_rssi:
                 nearest_rssi, nearest_name = rssi, name
+
+        data["advert_count"] = self._advert_count
+        prev_room = data.get("room")
         connected = self._client is not None and self._client.is_connected
         if proxies:
-            # fresh advertisements — trust them and remember the room
-            self._last_room = proxy_to_room(nearest_name)
-            self._last_proxy, self._last_rssi = nearest_name, nearest_rssi
-            data["nearest_proxy"] = nearest_name
+            # Hysteresis: keep the currently-held proxy unless a different one is clearly
+            # stronger (>= ROOM_SWITCH_MARGIN dBm), so adjacent rooms don't flicker the lights.
+            chosen_name, chosen_rssi = nearest_name, nearest_rssi
+            if self._last_proxy in proxies and nearest_name != self._last_proxy:
+                held_rssi = proxies[self._last_proxy]
+                if nearest_rssi - held_rssi < ROOM_SWITCH_MARGIN:
+                    chosen_name, chosen_rssi = self._last_proxy, held_rssi
+            self._last_room = proxy_to_room(chosen_name)
+            self._last_proxy, self._last_rssi = chosen_name, chosen_rssi
+            data["nearest_proxy"] = chosen_name
             data["room"] = self._last_room or "unknown"
-            data["nearest_rssi"] = nearest_rssi
+            data["nearest_rssi"] = chosen_rssi
             data["proxies"] = proxies
+            data["last_seen"] = dt_util.utcnow()  # heard now -> stamp; carries over when away
         elif connected:
             # A connected BLE device stops advertising, so the advert cache is empty even
             # though we're clearly in range. Keep the last-known room instead of "away".
@@ -393,6 +402,51 @@ class LefunCoordinator(DataUpdateCoordinator):
             data["room"] = "away"
             data["nearest_rssi"] = None
             data["proxies"] = {}
+        return data.get("room") != prev_room
+
+    def start_location_tracking(self) -> None:
+        """Update the room in near-real-time on every advertisement the proxies hear, not just
+        on the 60s tick — so follow-me lighting reacts within a second or two of a room change."""
+        if self._bt_unsub is not None:
+            return
+        self._bt_unsub = bluetooth.async_register_callback(
+            self.hass, self._on_advertisement,
+            bluetooth.BluetoothCallbackMatcher(address=self.address),
+            bluetooth.BluetoothScanningMode.ACTIVE)
+
+    def stop_location_tracking(self) -> None:
+        if self._bt_unsub is not None:
+            self._bt_unsub()
+            self._bt_unsub = None
+
+    def _resolve_scanner_name(self, source: str) -> str:
+        """Map a scanner source (usually the proxy's MAC) to its friendly name, cached."""
+        if source not in self._scanner_names:
+            for sd in bluetooth.async_scanner_devices_by_address(self.hass, self.address, False):
+                self._scanner_names[sd.scanner.source] = sd.scanner.name or sd.scanner.source
+        return self._scanner_names.get(source, source)
+
+    @callback
+    def _on_advertisement(self, service_info, _change) -> None:
+        """Every advertisement a proxy hears: record which proxy heard it (with a timestamp) so
+        _recompute_location can pick the freshest-nearest room, then push if the room changed."""
+        self._advert_count += 1
+        rssi = getattr(service_info, "rssi", None)
+        if rssi is not None:
+            name = self._resolve_scanner_name(getattr(service_info, "source", ""))
+            self._proxy_seen[name] = (rssi, self.hass.loop.time())
+        data = dict(self.data or {})
+        if self._recompute_location(data):
+            self.async_set_updated_data(data)
+
+    # ---------------------------------------------------------------- sensor poll
+    async def _async_update_data(self) -> dict:
+        """Every tick: recompute location from the advert cache (no connection). Battery/steps/HR
+        (which need a connection) are refreshed only every POLL_EVERY ticks."""
+        data = dict(self.data or {})
+
+        # --- location: which proxy hears the ring (advert cache, no connection) ---
+        self._recompute_location(data)
 
         # --- battery/steps/HR: need a connection; poll on the first tick then every POLL_EVERY ---
         self._poll_count += 1
@@ -408,14 +462,10 @@ class LefunCoordinator(DataUpdateCoordinator):
                     # so a 0x12 daysAgo=0 poll reads 0 mid-day. Fall back to the 0x12 summary for
                     # date/zero when the ring has no buckets yet today.
                     buckets = await self._command_collect(commands.CMD_ACTIVITY, bytes([0]))
-                    dbg = [b.hex(" ") for b in buckets][:15]   # diagnosis: raw activity buckets
                     day = commands.sum_activity(buckets)
                     if day is None:
                         summary = await self._command_with_response(commands.CMD_STEPS, bytes([0]))
-                        if summary:
-                            dbg.append("0x12:" + summary.hex(" "))
                         day = commands.parse_steps(summary) if summary else None
-                    data["steps_debug"] = dbg
                     if day:
                         data.update({"steps": day["steps"],
                                      "distance_m": day["distance_m"],

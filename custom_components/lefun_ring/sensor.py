@@ -32,20 +32,18 @@ class LefunSensorDesc:
 
 SENSORS = (
     LefunSensorDesc("heart_rate", "Heart rate", "bpm", None,
-                    SensorStateClass.MEASUREMENT, None, "mdi:heart-pulse",
-                    attrs=lambda d: {"ppg_debug": d.get("ppg_debug")}),
+                    SensorStateClass.MEASUREMENT, None, "mdi:heart-pulse"),
     LefunSensorDesc("spo2", "SpO₂", PERCENTAGE, None,
                     SensorStateClass.MEASUREMENT, None, "mdi:lungs"),
     # Blood pressure — experimental cuff-less PPG estimate, on-demand (measure_blood_pressure).
-    LefunSensorDesc("bp_systolic", "Blood pressure (systolic)", "mmHg", None,
+    # This ring reports a SINGLE value (~systolic); its BP result frame has no diastolic byte.
+    LefunSensorDesc("bp_systolic", "Blood pressure", "mmHg", None,
                     SensorStateClass.MEASUREMENT, None, "mdi:heart-plus-outline"),
-    LefunSensorDesc("bp_diastolic", "Blood pressure (diastolic)", "mmHg", None,
-                    SensorStateClass.MEASUREMENT, None, "mdi:heart-minus-outline"),
     LefunSensorDesc("battery", "Battery", PERCENTAGE, SensorDeviceClass.BATTERY,
                     SensorStateClass.MEASUREMENT, EntityCategory.DIAGNOSTIC, "mdi:ring"),
     LefunSensorDesc("steps", "Steps", "steps", None,
                     SensorStateClass.TOTAL_INCREASING, None, "mdi:shoe-print",
-                    attrs=lambda d: {"date": d.get("steps_date"), "steps_debug": d.get("steps_debug")}),
+                    attrs=lambda d: {"date": d.get("steps_date")}),
     LefunSensorDesc("distance_m", "Distance", UnitOfLength.METERS, SensorDeviceClass.DISTANCE,
                     SensorStateClass.TOTAL_INCREASING, None, "mdi:map-marker-distance"),
     LefunSensorDesc("calories", "Calories", "kcal", None,
@@ -56,6 +54,7 @@ SENSORS = (
             "proxy": d.get("nearest_proxy"),
             "rssi": d.get("nearest_rssi"),
             "proxies": d.get("proxies") or {},
+            "adverts": d.get("advert_count"),
         }),
     LefunSensorDesc("nearest_rssi", "Signal", SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
                     SensorDeviceClass.SIGNAL_STRENGTH, SensorStateClass.MEASUREMENT,
@@ -67,6 +66,10 @@ SENSORS = (
                                      "date": d.get("sleep_date")}),
     LefunSensorDesc("firmware", "Firmware", None, None, None, EntityCategory.DIAGNOSTIC, "mdi:chip",
                     attrs=lambda d: {"model": d.get("model_code"), "vendor": d.get("vendor_code")}),
+    # "Last seen" — set to now() each tick the ring is heard by a proxy; frozen when it goes away,
+    # so the UI shows how long since it last checked in (renders as live relative time).
+    LefunSensorDesc("last_seen", "Last seen", None, SensorDeviceClass.TIMESTAMP,
+                    None, None, "mdi:clock-check-outline"),
 )
 
 

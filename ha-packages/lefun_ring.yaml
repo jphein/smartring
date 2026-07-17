@@ -1,7 +1,11 @@
-# lefun_ring HA package — profile input helpers + an "apply" script, so the ring's user
-# profile (height/weight/age/sex, which drives distance & calorie accuracy) can be entered
-# from the dashboard instead of a raw service call.
-# Deploy to /homeassistant/packages/lefun_ring.yaml, then restart HA.
+# lefun_ring HA package.
+#  1) Profile helpers + an "apply" script (height/weight/age/sex -> distance/calorie accuracy).
+#  2) Follow-me lighting: the room the ring is in turns its lights on; leaving turns them off.
+#     Driven by sensor.smart_ring_location (nearest BLE proxy). The ring advertises freely now
+#     (keepalive removed — this ring has no working accelerometer, so shake gestures can't work),
+#     which is what makes real-time room tracking possible.
+# Deploy to /homeassistant/packages/lefun_ring.yaml, then restart HA (or reload packages).
+
 input_select:
   lefun_ring_sex:
     name: Ring profile — sex
@@ -35,6 +39,32 @@ input_number:
     step: 1
     mode: box
 
+input_boolean:
+  # Master switch for the whole follow-me behaviour.
+  ring_follow_lights:
+    name: Ring follow-me lighting
+    icon: mdi:lightbulb-auto
+  # Per-room opt-in — a room only follows the ring when BOTH the master and its own toggle are on.
+  # (Slug must equal the HA area_id: the automation builds 'input_boolean.ring_follow_' ~ area_id.)
+  ring_follow_laundry:
+    name: "Follow-me · Laundry / Office"
+    icon: mdi:washing-machine
+  ring_follow_kitchen:
+    name: "Follow-me · Kitchen"
+    icon: mdi:countertop
+  ring_follow_bedroom:
+    name: "Follow-me · Bedroom"
+    icon: mdi:bed
+  ring_follow_luna_s_room:
+    name: "Follow-me · Luna's Room"
+    icon: mdi:teddy-bear
+  ring_follow_shed:
+    name: "Follow-me · Shed"
+    icon: mdi:home-variant-outline
+
+# NB: "last checked in" is provided by the integration itself as sensor.smart_ring_last_seen
+# (a coordinator-stamped timestamp) — more reliable than a trigger-based template sensor here.
+
 script:
   lefun_ring_apply_profile:
     alias: Apply Lefun ring profile
@@ -46,3 +76,92 @@ script:
           height_cm: "{{ states('input_number.lefun_ring_height') | int }}"
           weight_kg: "{{ states('input_number.lefun_ring_weight') | int }}"
           age: "{{ states('input_number.lefun_ring_age') | int }}"
+
+  # Turn a room's "button_lights"-labelled entities on or off (same light set the iTag buttons use).
+  ring_set_room_lights:
+    alias: "Ring: set a room's button-lights on/off"
+    mode: parallel
+    max: 10
+    fields:
+      area:
+        description: HA area_id
+      turn:
+        description: "'on' or 'off'"
+    sequence:
+      - variables:
+          room_lights: >-
+            {{ area_entities(area) | select('in', label_entities('button_lights')) | list }}
+      - condition: template
+        value_template: "{{ room_lights | count > 0 }}"
+      - action: "homeassistant.turn_{{ turn }}"
+        continue_on_error: true
+        target:
+          entity_id: "{{ room_lights }}"
+
+automation:
+  - id: ring_followme_lighting
+    alias: "Ring: follow-me lighting"
+    mode: queued
+    max_exceeded: silent
+    triggers:
+      # Room changed (fires within a second or two via the coordinator's real-time advert callback).
+      - trigger: state
+        entity_id: sensor.smart_ring_location
+      # Master just enabled -> light up whatever room the ring is currently in.
+      - trigger: state
+        entity_id: input_boolean.ring_follow_lights
+        to: "on"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.ring_follow_lights
+        state: "on"
+    actions:
+      # Map the ring's nearest proxy -> HA area. Prefer an explicit table (ESPHome scanner names
+      # don't always match the HA device name); fall back to resolving the device by name.
+      - variables:
+          proxy_area:
+            laundry-ble-proxy: laundry
+            laundry-ble-proxy-2: laundry
+            office-ble-proxy: laundry
+            kitchen-ble-proxy: kitchen
+            bedroom-ble-proxy: bedroom
+            shed-ble-proxy: shed
+            lunas-room-ble-proxy: luna_s_room
+      - variables:
+          new_proxy: "{{ (state_attr('sensor.smart_ring_location','proxy') or '').split(' (')[0] }}"
+          old_proxy: >-
+            {{ ((trigger.from_state.attributes.proxy
+                 if (trigger.from_state is not none
+                     and trigger.entity_id == 'sensor.smart_ring_location')
+                 else none) or '').split(' (')[0] }}
+      - variables:
+          new_area: >-
+            {% set dev = device_id(new_proxy) if new_proxy else none %}
+            {{ proxy_area.get(new_proxy, area_id(dev) if dev else none) }}
+          old_area: >-
+            {% set dev = device_id(old_proxy) if old_proxy else none %}
+            {{ proxy_area.get(old_proxy, area_id(dev) if dev else none) }}
+      # Turn OFF the room we left — only when moving to a DIFFERENT real room whose toggle is on.
+      # (Going to "away"/unknown leaves lights alone, so sitting still — the ring sleeps — is safe.)
+      - if:
+          - condition: template
+            value_template: >-
+              {{ old_area not in [none, ''] and new_area not in [none, '']
+                 and old_area != new_area
+                 and is_state('input_boolean.ring_follow_' ~ old_area, 'on') }}
+        then:
+          - action: script.ring_set_room_lights
+            data:
+              area: "{{ old_area }}"
+              turn: "off"
+      # Turn ON the room we entered — if its toggle is on.
+      - if:
+          - condition: template
+            value_template: >-
+              {{ new_area not in [none, '']
+                 and is_state('input_boolean.ring_follow_' ~ new_area, 'on') }}
+        then:
+          - action: script.ring_set_room_lights
+            data:
+              area: "{{ new_area }}"
+              turn: "on"

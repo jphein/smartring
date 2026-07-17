@@ -13,6 +13,32 @@ views:
           Live vitals and **room tracking** by nearest BLE proxy.
           _HR/SpO₂/BP read only while worn (tap the measure buttons). Blood pressure is a
           cuff-less PPG **estimate** — indicative, not a medical reading._
+      - type: entities
+        title: Follow-me lighting
+        icon: mdi:lightbulb-auto
+        show_header_toggle: false
+        entities:
+          - entity: input_boolean.ring_follow_lights
+            name: Follow-me lighting (master)
+            icon: mdi:lightbulb-auto
+          - entity: sensor.smart_ring_location
+            name: Ring is in
+            icon: mdi:map-marker
+          - entity: sensor.lefun_ring_last_seen
+            name: Last checked in
+            icon: mdi:clock-check-outline
+          - type: section
+            label: Rooms that follow the ring
+          - entity: input_boolean.ring_follow_laundry
+          - entity: input_boolean.ring_follow_kitchen
+          - entity: input_boolean.ring_follow_bedroom
+          - entity: input_boolean.ring_follow_luna_s_room
+          - entity: input_boolean.ring_follow_shed
+      - type: markdown
+        content: >
+          _The room the ring is in turns its **Button Lights** on; leaving turns them off.
+          A room follows only when the master **and** its own toggle are on. Going "away"
+          (out of range) leaves lights as-is._
       - type: grid
         columns: 2
         square: false
@@ -55,14 +81,11 @@ views:
             entity: sensor.smart_ring_sleep
             name: Sleep (last night)
             icon: mdi:sleep
+          # The ring reports a single BP value (~systolic); there is no diastolic frame.
           - type: tile
             entity: sensor.smart_ring_blood_pressure_systolic
-            name: BP systolic
+            name: Blood pressure
             icon: mdi:heart-plus-outline
-          - type: tile
-            entity: sensor.smart_ring_blood_pressure_diastolic
-            name: BP diastolic
-            icon: mdi:heart-minus-outline
           - type: tile
             entity: sensor.smart_ring_firmware
             name: Firmware
