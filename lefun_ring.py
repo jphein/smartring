@@ -26,6 +26,7 @@ import asyncio
 import logging
 from dataclasses import asdict, dataclass, field
 
+from bleak import BleakClient
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import (
     BleakClientWithServiceCache,
@@ -95,6 +96,7 @@ class RingState:
     steps: int | None = None
     calories: int | None = None
     distance_m: int | None = None
+    steps_date: str | None = None
     heart_rate: int | None = None
     firmware: str | None = None
     model: str | None = None
@@ -114,15 +116,28 @@ class LefunRing:
     async def async_connect(self) -> None:
         if self._client and self._client.is_connected:
             return
-        # A bonded+trusted ring can be auto-reconnected by BlueZ with no owner,
-        # which makes bleak refuse ("already connected"). Drop any such link first.
+        # A bonded (esp. trusted) ring gets auto-reconnected by BlueZ with no
+        # bleak owner, so establish_connection fails with "already connected".
+        # close_stale_connections handles clients bleak knows about; for a
+        # foreign/ghost ACL, force a BlueZ-level disconnect and retry once.
         await close_stale_connections(self._device)
-        self._client = await establish_connection(
-            BleakClientWithServiceCache,
-            self._device,
-            self._device.address,
-            timeout=self._connect_timeout,
-        )
+        for attempt in range(2):
+            try:
+                self._client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    self._device,
+                    self._device.address,
+                    timeout=self._connect_timeout,
+                )
+                break
+            except Exception:
+                if attempt == 1:
+                    raise
+                try:  # force-drop the ghost connection, then retry
+                    await BleakClient(self._device).disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
+                await asyncio.sleep(1.0)
         await self._client.start_notify(NOTIFY_UUID, self._on_notify)
 
     async def async_disconnect(self) -> None:
@@ -175,13 +190,29 @@ class LefunRing:
     async def async_poll(self) -> RingState:
         """One-shot read of the common metrics."""
         state = RingState(address=self._device.address)
-        for cmd, key in (
-            (CMD_DEVICE_INFO, "device_info"),
-            (CMD_BATTERY, "battery"),
-            (CMD_STEPS, "steps"),
-        ):
-            frames = await self.async_command(cmd)
-            self._apply(state, cmd, frames)
+        self._apply(state, CMD_DEVICE_INFO, await self.async_command(CMD_DEVICE_INFO))
+        self._apply(state, CMD_BATTERY, await self.async_command(CMD_BATTERY))
+        # steps/activity/sleep require a one-byte "days ago" index (0 = today)
+        self._apply(state, CMD_STEPS, await self.async_command(CMD_STEPS, bytes([0])))
+        return state
+
+    async def async_set_time(self, when=None) -> bool | None:
+        """Set the ring's clock (fixes step-day attribution). Returns success flag."""
+        import datetime
+
+        t = when or datetime.datetime.now()
+        params = bytes([1, t.year % 100, t.month, t.day, t.hour, t.minute, t.second])
+        for f in await self.async_command(CMD_TIME, params):
+            p = parse_packet(f)
+            if p and p[0] == CMD_TIME and len(p[1]) >= 2:
+                return p[1][1] == 1
+        return None
+
+    async def async_steps(self, days_ago: int = 0) -> RingState:
+        """Read steps/distance/calories for a given day (0 = today … 6)."""
+        state = RingState(address=self._device.address)
+        frames = await self.async_command(CMD_STEPS, bytes([days_ago & 0xFF]))
+        self._apply(state, CMD_STEPS, frames)
         return state
 
     async def async_heart_rate(self, timeout: float = 20.0) -> RingState:
@@ -201,11 +232,14 @@ class LefunRing:
             state.raw[CMD_NAMES.get(rcmd, hex(rcmd))] = params.hex(" ")
             if rcmd == CMD_BATTERY and params:
                 state.battery = params[0]
-            elif rcmd == CMD_STEPS and len(params) >= 4:
-                state.steps = int.from_bytes(params[0:4], "little")
-                if len(params) >= 8:
-                    state.calories = int.from_bytes(params[4:6], "little")
-                    state.distance_m = int.from_bytes(params[6:8], "little")
+            elif rcmd == CMD_STEPS and len(params) >= 16:
+                # layout: daysAgo | year | month | day | steps(BE32) | dist(BE32) | cal(BE32)
+                year = params[1]
+                if year != 0xFF:  # 0xFF = no data recorded that day
+                    state.steps_date = f"20{year:02d}-{params[2]:02d}-{params[3]:02d}"
+                state.steps = int.from_bytes(params[4:8], "big")
+                state.distance_m = int.from_bytes(params[8:12], "big")
+                state.calories = int.from_bytes(params[12:16], "big")
             elif rcmd in (CMD_HR_RESULT, CMD_HR_START) and params:
                 state.heart_rate = params[-1] if params[-1] else (params[0] or None)
             elif rcmd == CMD_DEVICE_INFO and params:
@@ -241,6 +275,12 @@ async def _cli_main(args: argparse.Namespace) -> int:
             state = await ring.async_poll()
         elif args.cmd == "hr":
             state = await ring.async_heart_rate(timeout=args.timeout)
+        elif args.cmd == "steps":
+            state = await ring.async_steps(days_ago=args.day)
+        elif args.cmd == "settime":
+            ok = await ring.async_set_time()
+            print(f"set time: {'ok' if ok else 'failed/no-ack'}")
+            return 0
         elif args.cmd == "raw":
             cmd = int(args.opcode, 0)
             params = bytes(int(x, 0) for x in args.params)
@@ -265,6 +305,9 @@ def main() -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("poll", help="read device info + battery + steps")
     sub.add_parser("hr", help="trigger a live heart-rate measurement")
+    st = sub.add_parser("steps", help="read steps/distance/calories for a day")
+    st.add_argument("--day", type=int, default=0, help="days ago (0=today … 6)")
+    sub.add_parser("settime", help="set the ring's clock to now")
     raw = sub.add_parser("raw", help="send one raw command id (+ optional params) and dump responses")
     raw.add_argument("opcode", help="command id, e.g. 0x12")
     raw.add_argument("params", nargs="*", help="optional param bytes, e.g. 0x00")
