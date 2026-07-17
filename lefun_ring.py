@@ -29,6 +29,7 @@ from dataclasses import asdict, dataclass, field
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import (
     BleakClientWithServiceCache,
+    close_stale_connections,
     establish_connection,
 )
 
@@ -113,6 +114,9 @@ class LefunRing:
     async def async_connect(self) -> None:
         if self._client and self._client.is_connected:
             return
+        # A bonded+trusted ring can be auto-reconnected by BlueZ with no owner,
+        # which makes bleak refuse ("already connected"). Drop any such link first.
+        await close_stale_connections(self._device)
         self._client = await establish_connection(
             BleakClientWithServiceCache,
             self._device,
@@ -239,8 +243,9 @@ async def _cli_main(args: argparse.Namespace) -> int:
             state = await ring.async_heart_rate(timeout=args.timeout)
         elif args.cmd == "raw":
             cmd = int(args.opcode, 0)
-            frames = await ring.async_command(cmd, collect=args.timeout)
-            print(f"sent 0x{cmd:02x}; {len(frames)} frame(s):")
+            params = bytes(int(x, 0) for x in args.params)
+            frames = await ring.async_command(cmd, params, collect=args.timeout)
+            print(f"sent 0x{cmd:02x} params={params.hex(' ') or '-'}; {len(frames)} frame(s):")
             for f in frames:
                 print("  " + f.hex(" "))
             return 0
@@ -260,8 +265,9 @@ def main() -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("poll", help="read device info + battery + steps")
     sub.add_parser("hr", help="trigger a live heart-rate measurement")
-    raw = sub.add_parser("raw", help="send one raw command id and dump responses")
+    raw = sub.add_parser("raw", help="send one raw command id (+ optional params) and dump responses")
     raw.add_argument("opcode", help="command id, e.g. 0x12")
+    raw.add_argument("params", nargs="*", help="optional param bytes, e.g. 0x00")
     args = p.parse_args()
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

@@ -76,15 +76,37 @@ integration.
 ## Protocol reference
 
 Packet: `AB | length | command | params… | checksum` (response `5A | …`).
-Commands: `0x00` device info · `0x03` battery · `0x04` time · `0x0F` HR start ·
-`0x10` HR result · `0x12` steps · `0x13` activity · `0x15` sleep.
 Checksum + command IDs ported from
 [Gadgetbridge's Lefun driver](https://codeberg.org/Freeyourgadget/Gadgetbridge).
 
+**Commands this ring answers** (verified live, `5A` response):
+`0x00` firmware/device info · `0x03` battery · `0x0F` PPG/heart-rate start ·
+`0x12` steps · `0x13` activity · `0x15` sleep. Steps/activity/sleep take a
+one-byte day index (`0` = today), e.g. `raw 0x12 0x00`.
+
+**Commands it ignores** (no response): `0x06` profile, `0x07` UI pages,
+`0x08` features, `0x11` PPG data — so there is **no feature-bitmap or SpO₂
+command** in this firmware's Lefun set. SpO₂/skin-temp, if the ring measures
+them at all, would use an undocumented opcode discoverable only via an Android
+btsnoop capture of the Lefun app.
+
+**The unsolicited `5b 00 0a d2 04 0e 21 ef 27 11` push** (once/sec on `2D00`) is a
+valid Lefun frame — preamble `0x5b` (device→host push variant), command
+`0x0a = CMD_FIND_PHONE`. The ring is repeating its "find my phone" signal because
+nothing acknowledges it. Not sensor data.
+
 ## Status
 
-- [x] Bonded connect via `establish_connection`, notify + write-without-response
+- [x] Bonded connect via `establish_connection` (+ `close_stale_connections`)
 - [x] Device info, battery, live heart rate
-- [ ] Steps/activity/sleep parsing (needs day-index param — use `raw 0x12` to explore)
-- [ ] Decode the unsolicited `5b … 0a` live broadcast
-- [ ] HA custom component wrapper
+- [x] Steps / activity / sleep reachable (day-index param; parse WIP — read ~0 until worn)
+- [x] Decoded the `5b … 0a` broadcast → `CMD_FIND_PHONE`
+- [ ] Finish steps/activity/sleep field parsing (validate while wearing the ring)
+- [ ] HA custom component wrapper (DataUpdateCoordinator)
+
+## Known quirk
+
+The ring is bonded **and trusted**, so BlueZ auto-reconnects it with no owner and
+bleak then refuses ("Client is already connected"). `close_stale_connections()`
+handles the common case; if the adapter wedges after many cycles, reset it with
+`bluetoothctl power off; bluetoothctl power on`.
