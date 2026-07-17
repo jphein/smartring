@@ -75,7 +75,13 @@ def parse_hr(params: bytes) -> Optional[int]:
 
 
 def parse_steps(params: bytes) -> Optional[dict]:
-    """Steps frame: daysAgo|year|month|day|steps(BE32)|distance_m(BE32)|calories(BE32).
+    """0x12 CMD_STEPS_DATA: daysAgo|year|month|day|steps(BE32)|distance_m(BE32)|calories(BE32).
+
+    This is a *finalized daily summary* (BE32). Gadgetbridge NEVER polls it for a running
+    total — it only consumes 0x12 as an unsolicited live push (broadcastSample), and reads
+    stored/today step data from the 0x13 activity buckets instead (see ``parse_activity`` /
+    ``sum_activity``). A polled 0x12 daysAgo=0 reads 0 until the day's summary is finalized,
+    so use it only for finalized PAST days (daysAgo>=1) or as a date/zero fallback.
 
     ``year == 0xFF`` marks a day with no recorded data.
     """
@@ -89,3 +95,55 @@ def parse_steps(params: bytes) -> Optional[dict]:
         "distance_m": int.from_bytes(params[8:12], "big"),
         "calories": int.from_bytes(params[12:16], "big"),
     }
+
+
+def parse_activity(params: bytes) -> Optional[dict]:
+    """One 0x13 CMD_ACTIVITY_DATA intraday bucket (14 params, BIG-endian):
+
+        daysAgo | totalRecords | currentRecord | year | month | day | hour | minute
+        | steps(BE16) | distance_m(BE16) | calories(BE16)
+
+    The ring streams ``totalRecords`` of these per requested day (currentRecord = 1..N).
+    ``totalRecords == 0`` means the day has no recorded activity. Ported from Gadgetbridge
+    ``GetActivityDataCommand.deserializeParams``.
+    """
+    if len(params) < 14:
+        return None
+    year = params[3]
+    date = None if year == 0xFF else f"20{year:02d}-{params[4]:02d}-{params[5]:02d}"
+    return {
+        "days_ago": params[0],
+        "total_records": params[1],
+        "current_record": params[2],
+        "date": date,
+        "time": f"{params[6]:02d}:{params[7]:02d}",
+        "steps": int.from_bytes(params[8:10], "big"),
+        "distance_m": int.from_bytes(params[10:12], "big"),
+        "calories": int.from_bytes(params[12:14], "big"),
+    }
+
+
+def sum_activity(frames: list[bytes]) -> Optional[dict]:
+    """Sum a day's 0x13 activity buckets into a daily total — this is how Gadgetbridge
+    derives "today's steps" (``handleActivityData`` stores per-timestamp samples that the
+    UI sums). ``frames`` is the list of 0x13 response *param* payloads collected for one day.
+
+    Skips empty-day frames (``totalRecords == 0``). Returns ``None`` if the day has no real
+    buckets, else ``{steps, distance_m, calories, date, buckets}``.
+    """
+    steps = distance = calories = 0
+    date = None
+    n = 0
+    for params in frames:
+        bucket = parse_activity(params)
+        if bucket is None or bucket["total_records"] == 0:
+            continue
+        steps += bucket["steps"]
+        distance += bucket["distance_m"]
+        calories += bucket["calories"]
+        date = date or bucket["date"]
+        n += 1
+    if n == 0:
+        return None
+    return {"steps": steps, "distance_m": distance, "calories": calories,
+            "date": date, "buckets": n}

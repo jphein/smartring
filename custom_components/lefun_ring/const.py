@@ -17,8 +17,9 @@ NOTIFY_CHAR = "00002d00-0000-1000-8000-00805f9b34fb"  # notify: responses/pushes
 # Coordinator tick: location (which proxy hears the ring) is recomputed every tick from the
 # Bluetooth advert cache (cheap, no connection). Battery/steps/HR need a BLE connection, so
 # they are polled only every Nth tick to spare the ring's battery / a proxy connection slot.
-# (This ring also suspends its own pedometer while a central is connected, so infrequent,
-# short connections are what let step totals actually accumulate.)
+# (Step counting is always-on in firmware and NOT suspended by a connection — the coordinator
+# reads today's steps by summing the 0x13 activity buckets, since the 0x12 daily summary reads
+# 0 until finalized; see coordinator._async_update_data and proto.commands.sum_activity.)
 UPDATE_INTERVAL_SECONDS = 60
 POLL_EVERY = 10  # -> battery/steps/HR ~every 10 min at a 60s tick
 

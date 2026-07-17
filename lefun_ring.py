@@ -111,6 +111,7 @@ class LefunRing:
         self._connect_timeout = connect_timeout
         self._client: BleakClientWithServiceCache | None = None
         self._queue: asyncio.Queue[bytes] = asyncio.Queue()
+        self._time_synced = False  # clock set once per connection (see _ensure_time_synced)
 
     # -- connection ------------------------------------------------------------
     async def async_connect(self) -> None:
@@ -121,6 +122,7 @@ class LefunRing:
         # close_stale_connections handles clients bleak knows about; for a
         # foreign/ghost ACL, force a BlueZ-level disconnect and retry once.
         await close_stale_connections(self._device)
+        self._time_synced = False  # fresh connection -> re-sync the clock on first read
         for attempt in range(2):
             try:
                 self._client = await establish_connection(
@@ -187,13 +189,39 @@ class LefunRing:
         return frames
 
     # -- high level ------------------------------------------------------------
+    async def _ensure_time_synced(self) -> None:
+        """Set the ring clock once per connection, then let it settle before a multi-fetch.
+
+        Gadgetbridge sets time (0x04) on *every* connect — this fixes step-day attribution —
+        and inserts a ~1s wait before any multi-fetch read (``MultiFetchRequest.prePerform``:
+        "device sometimes won't respond") or the ring stays silent. Best-effort: the ring
+        never ACKs the SET, but the clock takes.
+        """
+        if self._time_synced:
+            return
+        try:
+            await self.async_set_time()
+        except Exception:  # noqa: BLE001 — best effort; ring doesn't ack anyway
+            pass
+        await asyncio.sleep(1.2)
+        self._time_synced = True
+
     async def async_poll(self) -> RingState:
-        """One-shot read of the common metrics."""
+        """One-shot read of the common metrics.
+
+        Today's steps come from the **0x13 activity buckets (summed)**, not a 0x12 poll:
+        0x12 is a finalized daily summary the firmware doesn't keep live, so a 0x12 daysAgo=0
+        poll reads 0 mid-day (Gadgetbridge never polls 0x12 — it sums the 0x13 buckets).
+        """
         state = RingState(address=self._device.address)
         self._apply(state, CMD_DEVICE_INFO, await self.async_command(CMD_DEVICE_INFO))
         self._apply(state, CMD_BATTERY, await self.async_command(CMD_BATTERY))
-        # steps/activity/sleep require a one-byte "days ago" index (0 = today)
-        self._apply(state, CMD_STEPS, await self.async_command(CMD_STEPS, bytes([0])))
+        await self._ensure_time_synced()
+        # today's steps/distance/calories = sum of the 0x13 intraday buckets
+        self._apply(state, CMD_ACTIVITY,
+                    await self.async_command(CMD_ACTIVITY, bytes([0]), collect=6.0))
+        if state.steps is None:  # no 0x13 buckets today -> fall back to 0x12 for date + zero
+            self._apply(state, CMD_STEPS, await self.async_command(CMD_STEPS, bytes([0])))
         return state
 
     async def async_set_time(self, when=None) -> bool | None:
@@ -209,10 +237,29 @@ class LefunRing:
         return None
 
     async def async_steps(self, days_ago: int = 0) -> RingState:
-        """Read steps/distance/calories for a given day (0 = today … 6)."""
+        """Read the 0x12 *finalized daily summary* for a day (0 = today … 6).
+
+        NOTE: for daysAgo=0 (today) this reads 0 until the day's summary is finalized —
+        use :meth:`async_activity` for today's running total. Kept for finalized PAST days.
+        """
         state = RingState(address=self._device.address)
         frames = await self.async_command(CMD_STEPS, bytes([days_ago & 0xFF]))
         self._apply(state, CMD_STEPS, frames)
+        return state
+
+    async def async_activity(self, days_ago: int = 0) -> RingState:
+        """Read + SUM the 0x13 intraday activity buckets for a day (0 = today … 6).
+
+        This is the live/stored step total on the Lefun protocol (Gadgetbridge sums these
+        buckets for its daily figure). Multi-record: the ring streams one frame per bucket,
+        which we collect over a window and accumulate.
+        """
+        state = RingState(address=self._device.address)
+        await self._ensure_time_synced()
+        frames = await self.async_command(CMD_ACTIVITY, bytes([days_ago & 0xFF]), collect=8.0)
+        self._apply(state, CMD_ACTIVITY, frames)
+        if state.steps is None and days_ago == 0:  # no buckets -> 0x12 fallback for date + zero
+            self._apply(state, CMD_STEPS, await self.async_command(CMD_STEPS, bytes([0])))
         return state
 
     async def async_heart_rate(self, timeout: float = 20.0) -> RingState:
@@ -233,13 +280,26 @@ class LefunRing:
             if rcmd == CMD_BATTERY and params:
                 state.battery = params[0]
             elif rcmd == CMD_STEPS and len(params) >= 16:
-                # layout: daysAgo | year | month | day | steps(BE32) | dist(BE32) | cal(BE32)
+                # 0x12 finalized daily summary: daysAgo|year|month|day|steps(BE32)|dist|cal
                 year = params[1]
                 if year != 0xFF:  # 0xFF = no data recorded that day
                     state.steps_date = f"20{year:02d}-{params[2]:02d}-{params[3]:02d}"
-                state.steps = int.from_bytes(params[4:8], "big")
-                state.distance_m = int.from_bytes(params[8:12], "big")
-                state.calories = int.from_bytes(params[12:16], "big")
+                # don't clobber a 0x13-derived total with the finalized-0 summary
+                if state.steps is None:
+                    state.steps = int.from_bytes(params[4:8], "big")
+                    state.distance_m = int.from_bytes(params[8:12], "big")
+                    state.calories = int.from_bytes(params[12:16], "big")
+            elif rcmd == CMD_ACTIVITY and len(params) >= 14:
+                # 0x13 intraday bucket: daysAgo|totalRecords|currentRecord|Y|M|D|h|m|
+                # steps(BE16)|dist(BE16)|cal(BE16). Sum across all buckets for the day (GB's
+                # approach); skip empty-day frames (totalRecords == 0).
+                if params[1] != 0:
+                    year = params[3]
+                    if year != 0xFF and state.steps_date is None:
+                        state.steps_date = f"20{year:02d}-{params[4]:02d}-{params[5]:02d}"
+                    state.steps = (state.steps or 0) + int.from_bytes(params[8:10], "big")
+                    state.distance_m = (state.distance_m or 0) + int.from_bytes(params[10:12], "big")
+                    state.calories = (state.calories or 0) + int.from_bytes(params[12:14], "big")
             elif rcmd in (CMD_HR_RESULT, CMD_HR_START) and params:
                 state.heart_rate = params[-1] if params[-1] else (params[0] or None)
             elif rcmd == CMD_DEVICE_INFO and params:
@@ -276,7 +336,13 @@ async def _cli_main(args: argparse.Namespace) -> int:
         elif args.cmd == "hr":
             state = await ring.async_heart_rate(timeout=args.timeout)
         elif args.cmd == "steps":
-            state = await ring.async_steps(days_ago=args.day)
+            # today (day 0) = summed 0x13 buckets (live total); past days = 0x12 finalized summary
+            if args.day == 0:
+                state = await ring.async_activity(days_ago=0)
+            else:
+                state = await ring.async_steps(days_ago=args.day)
+        elif args.cmd == "activity":
+            state = await ring.async_activity(days_ago=args.day)
         elif args.cmd == "settime":
             ok = await ring.async_set_time()
             print(f"set time: {'ok' if ok else 'failed/no-ack'}")
@@ -305,8 +371,10 @@ def main() -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("poll", help="read device info + battery + steps")
     sub.add_parser("hr", help="trigger a live heart-rate measurement")
-    st = sub.add_parser("steps", help="read steps/distance/calories for a day")
+    st = sub.add_parser("steps", help="steps/distance/calories (today via 0x13 buckets, past days via 0x12)")
     st.add_argument("--day", type=int, default=0, help="days ago (0=today … 6)")
+    ac = sub.add_parser("activity", help="read+sum the 0x13 intraday step buckets for a day")
+    ac.add_argument("--day", type=int, default=0, help="days ago (0=today … 6)")
     sub.add_parser("settime", help="set the ring's clock to now")
     raw = sub.add_parser("raw", help="send one raw command id (+ optional params) and dump responses")
     raw.add_argument("opcode", help="command id, e.g. 0x12")

@@ -111,7 +111,12 @@ A ready Lovelace dashboard is in `dashboard/lefun-dashboard.yaml`. See the compo
 - [x] Steps / activity / sleep parse (day-index param, big-endian; date verified live)
 - [x] Set-time (`CMD_TIME`); decoded the `5b … 0a` broadcast → `CMD_FIND_PHONE`
 - [x] HA custom component (coordinator + sensors + services) and dashboard
-- [ ] Validate step *counts* accumulate (ring suspends its pedometer while actively polled)
+- [x] **Today's steps fixed**: read/sum the `0x13` activity buckets, not the `0x12` daily
+  summary. `0x12` (daysAgo=0) is a *finalized* summary that reads 0 mid-day — Gadgetbridge
+  never polls it; it sums `0x13` buckets (and consumes `0x12` only as a live push). Set the
+  clock on connect + settle before the multi-fetch, matching GB. (Step counting is always-on;
+  it is **not** suspended by a connection — that earlier note was a misdiagnosis of this bug.)
+- [ ] Confirm nonzero counts live: wear + walk ~100 steps, then `... steps` (needs a physical walk)
 
 ## Known quirk
 

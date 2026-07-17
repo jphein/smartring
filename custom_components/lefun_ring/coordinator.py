@@ -80,6 +80,13 @@ class LefunCoordinator(DataUpdateCoordinator):
             BleakClient, ble_device, self.address, disconnected_callback=self._on_disconnect)
         await client.start_notify(NOTIFY_CHAR, self._on_notify)
         self._client = client
+        # GB sets the ring clock on every connect (fixes step-day attribution) and waits ~1s
+        # before any multi-fetch read, or the ring sometimes won't respond. Ring never ACKs.
+        try:
+            await self._command(commands.CMD_TIME, commands.time_payload())
+        except Exception:  # noqa: BLE001 — best effort
+            _LOGGER.debug("set-time on connect failed (non-fatal)")
+        await asyncio.sleep(1.2)
 
     async def async_disconnect(self) -> None:
         if self._client is not None and self._client.is_connected:
@@ -110,6 +117,32 @@ class LefunCoordinator(DataUpdateCoordinator):
             parsed = commands.parse_packet(frame)
             if parsed and parsed[0] == cmd:
                 return parsed[1]
+
+    async def _command_collect(self, cmd: int, params: bytes = b"",
+                               window: float = 6.0) -> list[bytes]:
+        """Send a command and collect ALL matching-cmd response frames within ``window``.
+
+        For a multi-record fetch (0x13 activity buckets) the ring streams one frame per
+        bucket after a single request, so we accumulate over a time window instead of
+        returning on the first frame like :meth:`_command_with_response`."""
+        while not self._notifies.empty():
+            self._notifies.get_nowait()
+        await self._command(cmd, params)
+        loop = self.hass.loop
+        deadline = loop.time() + window
+        frames: list[bytes] = []
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            try:
+                frame = await asyncio.wait_for(self._notifies.get(), remaining)
+            except asyncio.TimeoutError:
+                break
+            parsed = commands.parse_packet(frame)
+            if parsed and parsed[0] == cmd:
+                frames.append(parsed[1])
+        return frames
 
     # ---------------------------------------------------------------- operations
     async def set_time(self, when: Optional[datetime] = None) -> None:
@@ -165,13 +198,20 @@ class LefunCoordinator(DataUpdateCoordinator):
                     bat = await self._command_with_response(commands.CMD_BATTERY)
                     if bat is not None:
                         data["battery"] = commands.parse_battery(bat)
-                    steps = await self._command_with_response(commands.CMD_STEPS, bytes([0]))
-                    parsed = commands.parse_steps(steps) if steps else None
-                    if parsed:
-                        data.update({"steps": parsed["steps"],
-                                     "distance_m": parsed["distance_m"],
-                                     "calories": parsed["calories"],
-                                     "steps_date": parsed["date"]})
+                    # today's steps = SUM of the 0x13 intraday activity buckets. 0x12 is only a
+                    # finalized daily summary the firmware doesn't keep live (GB never polls it),
+                    # so a 0x12 daysAgo=0 poll reads 0 mid-day. Fall back to the 0x12 summary for
+                    # date/zero when the ring has no buckets yet today.
+                    buckets = await self._command_collect(commands.CMD_ACTIVITY, bytes([0]))
+                    day = commands.sum_activity(buckets)
+                    if day is None:
+                        summary = await self._command_with_response(commands.CMD_STEPS, bytes([0]))
+                        day = commands.parse_steps(summary) if summary else None
+                    if day:
+                        data.update({"steps": day["steps"],
+                                     "distance_m": day["distance_m"],
+                                     "calories": day["calories"],
+                                     "steps_date": day["date"]})
                     hr = await self._command_with_response(commands.CMD_HR_START, timeout=25.0)
                     hrv = commands.parse_hr(hr) if hr else None
                     if hrv:
