@@ -1,0 +1,48 @@
+# lefun_ring HA package — profile input helpers + an "apply" script, so the ring's user
+# profile (height/weight/age/sex, which drives distance & calorie accuracy) can be entered
+# from the dashboard instead of a raw service call.
+# Deploy to /homeassistant/packages/lefun_ring.yaml, then restart HA.
+input_select:
+  lefun_ring_sex:
+    name: Ring profile — sex
+    icon: mdi:human-male-height
+    options:
+      - male
+      - female
+
+input_number:
+  lefun_ring_height:
+    name: Ring profile — height
+    icon: mdi:human-male-height
+    min: 100
+    max: 220
+    step: 1
+    unit_of_measurement: cm
+    mode: box
+  lefun_ring_weight:
+    name: Ring profile — weight
+    icon: mdi:weight-kilogram
+    min: 30
+    max: 200
+    step: 1
+    unit_of_measurement: kg
+    mode: box
+  lefun_ring_age:
+    name: Ring profile — age
+    icon: mdi:cake-variant
+    min: 5
+    max: 110
+    step: 1
+    mode: box
+
+script:
+  lefun_ring_apply_profile:
+    alias: Apply Lefun ring profile
+    icon: mdi:account-cog
+    sequence:
+      - action: lefun_ring.set_profile
+        data:
+          sex: "{{ states('input_select.lefun_ring_sex') }}"
+          height_cm: "{{ states('input_number.lefun_ring_height') | int }}"
+          weight_kg: "{{ states('input_number.lefun_ring_weight') | int }}"
+          age: "{{ states('input_number.lefun_ring_age') | int }}"

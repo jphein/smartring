@@ -122,3 +122,17 @@ views:
               action: perform-action
               perform_action: lefun_ring.set_time
               data: {}
+      - type: entities
+        title: User profile → accurate distance & calories
+        entities:
+          - input_select.lefun_ring_sex
+          - input_number.lefun_ring_height
+          - input_number.lefun_ring_weight
+          - input_number.lefun_ring_age
+      - type: button
+        name: Apply profile to ring
+        icon: mdi:account-cog
+        tap_action:
+          action: perform-action
+          perform_action: script.lefun_ring_apply_profile
+          data: {}

@@ -64,6 +64,9 @@ class LefunCoordinator(DataUpdateCoordinator):
         self._stopping = False
         self._connected_at = 0.0
         self._last_findphone = 0.0
+        self._last_room: Optional[str] = None
+        self._last_proxy: Optional[str] = None
+        self._last_rssi: Optional[int] = None
 
     # ---------------------------------------------------------------- connection
     def _on_disconnect(self, _client: BleakClient) -> None:
@@ -309,10 +312,27 @@ class LefunCoordinator(DataUpdateCoordinator):
             proxies[name] = rssi
             if nearest_rssi is None or rssi > nearest_rssi:
                 nearest_rssi, nearest_name = rssi, name
-        data["nearest_proxy"] = nearest_name
-        data["room"] = proxy_to_room(nearest_name) or "away"
-        data["nearest_rssi"] = nearest_rssi
-        data["proxies"] = proxies
+        connected = self._client is not None and self._client.is_connected
+        if proxies:
+            # fresh advertisements — trust them and remember the room
+            self._last_room = proxy_to_room(nearest_name)
+            self._last_proxy, self._last_rssi = nearest_name, nearest_rssi
+            data["nearest_proxy"] = nearest_name
+            data["room"] = self._last_room or "unknown"
+            data["nearest_rssi"] = nearest_rssi
+            data["proxies"] = proxies
+        elif connected:
+            # A connected BLE device stops advertising, so the advert cache is empty even
+            # though we're clearly in range. Keep the last-known room instead of "away".
+            data["room"] = self._last_room or "connected"
+            data["nearest_proxy"] = self._last_proxy
+            data["nearest_rssi"] = self._last_rssi
+            data["proxies"] = {self._last_proxy: self._last_rssi} if self._last_proxy else {}
+        else:
+            data["nearest_proxy"] = None
+            data["room"] = "away"
+            data["nearest_rssi"] = None
+            data["proxies"] = {}
 
         # --- battery/steps/HR: need a connection; poll on the first tick then every POLL_EVERY ---
         self._poll_count += 1
