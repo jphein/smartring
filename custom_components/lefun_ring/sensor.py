@@ -32,7 +32,8 @@ class LefunSensorDesc:
 
 SENSORS = (
     LefunSensorDesc("heart_rate", "Heart rate", "bpm", None,
-                    SensorStateClass.MEASUREMENT, None, "mdi:heart-pulse"),
+                    SensorStateClass.MEASUREMENT, None, "mdi:heart-pulse",
+                    attrs=lambda d: {"ppg_debug": d.get("ppg_debug")}),
     LefunSensorDesc("spo2", "SpO₂", PERCENTAGE, None,
                     SensorStateClass.MEASUREMENT, None, "mdi:lungs"),
     # Blood pressure — experimental cuff-less PPG estimate, on-demand (measure_blood_pressure).
@@ -44,7 +45,7 @@ SENSORS = (
                     SensorStateClass.MEASUREMENT, EntityCategory.DIAGNOSTIC, "mdi:ring"),
     LefunSensorDesc("steps", "Steps", "steps", None,
                     SensorStateClass.TOTAL_INCREASING, None, "mdi:shoe-print",
-                    attrs=lambda d: {"date": d.get("steps_date")}),
+                    attrs=lambda d: {"date": d.get("steps_date"), "steps_debug": d.get("steps_debug")}),
     LefunSensorDesc("distance_m", "Distance", UnitOfLength.METERS, SensorDeviceClass.DISTANCE,
                     SensorStateClass.TOTAL_INCREASING, None, "mdi:map-marker-distance"),
     LefunSensorDesc("calories", "Calories", "kcal", None,

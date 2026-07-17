@@ -67,6 +67,7 @@ class LefunCoordinator(DataUpdateCoordinator):
         self._last_room: Optional[str] = None
         self._last_proxy: Optional[str] = None
         self._last_rssi: Optional[int] = None
+        self._ppg_debug: list[str] = []  # last measurement's frames, surfaced for diagnosis
 
     # ---------------------------------------------------------------- connection
     def _on_disconnect(self, _client: BleakClient) -> None:
@@ -222,19 +223,27 @@ class LefunCoordinator(DataUpdateCoordinator):
         await self._command(commands.CMD_PPG_START, commands.ppg_start_payload(ppg_type))
         loop = self.hass.loop
         deadline = loop.time() + window
+        seen: list[str] = []
+        result = None
         while True:
             remaining = deadline - loop.time()
             if remaining <= 0:
-                return None
+                break
             try:
                 frame = await asyncio.wait_for(self._notifies.get(), remaining)
             except asyncio.TimeoutError:
-                return None
-            parsed = commands.parse_packet(frame)
-            if parsed and parsed[0] == commands.CMD_PPG_RESULT:
-                r = commands.parse_ppg_result(parsed[1])
+                break
+            p = commands.parse_packet(frame)
+            if not p or p[0] == commands.CMD_FIND_PHONE:
+                continue                                    # skip the ~1/s heartbeat
+            seen.append(frame.hex(" "))
+            if p[0] == commands.CMD_PPG_RESULT:
+                r = commands.parse_ppg_result(p[1])
                 if r and r["value"]:
-                    return r["value"]
+                    result = r
+                    break
+        self._ppg_debug = seen[-15:]                        # surfaced for diagnosis
+        return result["value"]
 
     # ---------------------------------------------------------------- operations
     async def set_time(self, when: Optional[datetime] = None) -> None:
@@ -263,34 +272,40 @@ class LefunCoordinator(DataUpdateCoordinator):
             await self._ensure_connected()
             await self._command(commands.CMD_REMOTE_CAMERA, commands.camera_mode_payload(enabled))
 
-    async def measure_heart_rate(self, timeout: float = 30.0) -> Optional[int]:
+    async def measure_heart_rate(self, timeout: float = 45.0) -> Optional[int]:
         async with self._lock:
             await self._ensure_connected()
             r = await self._measure_ppg(commands.PPG_TYPE_HEART_RATE, window=timeout)
         hr = r["value"] if r else None
+        nd = {**(self.data or {}), "ppg_debug": self._ppg_debug}  # always surface frames
         if hr:
-            self.async_set_updated_data({**(self.data or {}), "heart_rate": hr})
+            nd["heart_rate"] = hr
+        self.async_set_updated_data(nd)
         return hr
 
-    async def measure_spo2(self, timeout: float = 30.0) -> Optional[int]:
+    async def measure_spo2(self, timeout: float = 45.0) -> Optional[int]:
         async with self._lock:
             await self._ensure_connected()
             r = await self._measure_ppg(commands.PPG_TYPE_BLOOD_OXYGEN, window=timeout)
         spo2 = r["value"] if r else None
+        nd = {**(self.data or {}), "ppg_debug": self._ppg_debug}
         if spo2:
-            self.async_set_updated_data({**(self.data or {}), "spo2": spo2})
+            nd["spo2"] = spo2
+        self.async_set_updated_data(nd)
         return spo2
 
-    async def measure_blood_pressure(self, timeout: float = 30.0) -> Optional[dict]:
+    async def measure_blood_pressure(self, timeout: float = 45.0) -> Optional[dict]:
         """Experimental: cuff-less PPG estimate — systolic/diastolic. Treat as indicative only."""
         async with self._lock:
             await self._ensure_connected()
             r = await self._measure_ppg(commands.PPG_TYPE_BLOOD_PRESSURE, window=timeout)
+        nd = {**(self.data or {}), "ppg_debug": self._ppg_debug}
+        if r:
+            nd["bp_systolic"], nd["bp_diastolic"] = r["value"], r.get("extra")
+        self.async_set_updated_data(nd)
         if not r:
             return None
         bp = {"systolic": r["value"], "diastolic": r.get("extra")}
-        self.async_set_updated_data({**(self.data or {}), "bp_systolic": bp["systolic"],
-                                     "bp_diastolic": bp["diastolic"]})
         return bp
 
     # ---------------------------------------------------------------- sensor poll
@@ -348,10 +363,14 @@ class LefunCoordinator(DataUpdateCoordinator):
                     # so a 0x12 daysAgo=0 poll reads 0 mid-day. Fall back to the 0x12 summary for
                     # date/zero when the ring has no buckets yet today.
                     buckets = await self._command_collect(commands.CMD_ACTIVITY, bytes([0]))
+                    dbg = [b.hex(" ") for b in buckets][:15]   # diagnosis: raw activity buckets
                     day = commands.sum_activity(buckets)
                     if day is None:
                         summary = await self._command_with_response(commands.CMD_STEPS, bytes([0]))
+                        if summary:
+                            dbg.append("0x12:" + summary.hex(" "))
                         day = commands.parse_steps(summary) if summary else None
+                    data["steps_debug"] = dbg
                     if day:
                         data.update({"steps": day["steps"],
                                      "distance_m": day["distance_m"],
@@ -364,10 +383,11 @@ class LefunCoordinator(DataUpdateCoordinator):
                             data["firmware"] = di["software_version"]
                             data["model_code"] = di["type_code"]
                             data["vendor_code"] = di["vendor_code"]
-                    hr = await self._measure_ppg(commands.PPG_TYPE_HEART_RATE, window=22.0)
+                    hr = await self._measure_ppg(commands.PPG_TYPE_HEART_RATE, window=30.0)
                     if hr:
                         data["heart_rate"] = hr["value"]
-                    spo2 = await self._measure_ppg(commands.PPG_TYPE_BLOOD_OXYGEN, window=22.0)
+                    data["ppg_debug"] = self._ppg_debug     # diagnosis: raw PPG frames
+                    spo2 = await self._measure_ppg(commands.PPG_TYPE_BLOOD_OXYGEN, window=30.0)
                     if spo2:
                         data["spo2"] = spo2["value"]
                     night = commands.summarize_sleep(
