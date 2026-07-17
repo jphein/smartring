@@ -8,7 +8,7 @@ from homeassistant.components.sensor import (SensorDeviceClass, SensorEntity,
                                              SensorStateClass)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (PERCENTAGE, SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
-                                 EntityCategory, UnitOfLength)
+                                 EntityCategory, UnitOfLength, UnitOfTime)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -33,6 +33,8 @@ class LefunSensorDesc:
 SENSORS = (
     LefunSensorDesc("heart_rate", "Heart rate", "bpm", None,
                     SensorStateClass.MEASUREMENT, None, "mdi:heart-pulse"),
+    LefunSensorDesc("spo2", "SpO₂", PERCENTAGE, None,
+                    SensorStateClass.MEASUREMENT, None, "mdi:lungs"),
     LefunSensorDesc("battery", "Battery", PERCENTAGE, SensorDeviceClass.BATTERY,
                     SensorStateClass.MEASUREMENT, EntityCategory.DIAGNOSTIC, "mdi:ring"),
     LefunSensorDesc("steps", "Steps", "steps", None,
@@ -52,6 +54,13 @@ SENSORS = (
     LefunSensorDesc("nearest_rssi", "Signal", SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
                     SensorDeviceClass.SIGNAL_STRENGTH, SensorStateClass.MEASUREMENT,
                     EntityCategory.DIAGNOSTIC, "mdi:bluetooth"),
+    LefunSensorDesc("sleep_total_min", "Sleep", UnitOfTime.MINUTES, SensorDeviceClass.DURATION,
+                    None, None, "mdi:sleep",
+                    attrs=lambda d: {"deep_min": d.get("sleep_deep_min"),
+                                     "light_min": d.get("sleep_light_min"),
+                                     "date": d.get("sleep_date")}),
+    LefunSensorDesc("firmware", "Firmware", None, None, None, EntityCategory.DIAGNOSTIC, "mdi:chip",
+                    attrs=lambda d: {"model": d.get("model_code"), "vendor": d.get("vendor_code")}),
 )
 
 

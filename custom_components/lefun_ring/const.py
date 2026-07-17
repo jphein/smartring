@@ -30,3 +30,5 @@ PROXY_ROOM_OVERRIDES: dict[str, str] = {}
 SERVICE_SET_TIME = "set_time"
 SERVICE_FIND = "find"
 SERVICE_MEASURE_HR = "measure_heart_rate"
+SERVICE_MEASURE_SPO2 = "measure_spo2"
+SERVICE_MEASURE_BP = "measure_blood_pressure"

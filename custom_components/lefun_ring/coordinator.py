@@ -144,11 +144,12 @@ class LefunCoordinator(DataUpdateCoordinator):
                 frames.append(parsed[1])
         return frames
 
-    async def _measure_ppg(self, ppg_type: int, window: float = 30.0) -> Optional[int]:
-        """Start a typed PPG measurement (0x0F + ppgType) and wait for the 0x10 result value.
+    async def _measure_ppg(self, ppg_type: int, window: float = 30.0) -> Optional[dict]:
+        """Start a typed PPG measurement (0x0F + ppgType) and wait for the 0x10 result.
 
-        The 0x0F response is only a start-ack; the real reading arrives ~15-30s later in a
-        0x10 frame (<ppgType><value>). Requires the ring to be worn (finger on the sensor)."""
+        Returns the parsed result dict ({value, extra}) or None. The 0x0F response is only a
+        start-ack; the real reading arrives ~15-30s later in a 0x10 frame (<ppgType><value>).
+        Requires the ring to be worn (finger on the sensor)."""
         while not self._notifies.empty():
             self._notifies.get_nowait()
         await self._command(commands.CMD_PPG_START, commands.ppg_start_payload(ppg_type))
@@ -183,10 +184,32 @@ class LefunCoordinator(DataUpdateCoordinator):
     async def measure_heart_rate(self, timeout: float = 30.0) -> Optional[int]:
         async with self._lock:
             await self._ensure_connected()
-            hr = await self._measure_ppg(commands.PPG_TYPE_HEART_RATE, window=timeout)
+            r = await self._measure_ppg(commands.PPG_TYPE_HEART_RATE, window=timeout)
+        hr = r["value"] if r else None
         if hr:
             self.async_set_updated_data({**(self.data or {}), "heart_rate": hr})
         return hr
+
+    async def measure_spo2(self, timeout: float = 30.0) -> Optional[int]:
+        async with self._lock:
+            await self._ensure_connected()
+            r = await self._measure_ppg(commands.PPG_TYPE_BLOOD_OXYGEN, window=timeout)
+        spo2 = r["value"] if r else None
+        if spo2:
+            self.async_set_updated_data({**(self.data or {}), "spo2": spo2})
+        return spo2
+
+    async def measure_blood_pressure(self, timeout: float = 30.0) -> Optional[dict]:
+        """Experimental: cuff-less PPG estimate — systolic/diastolic. Treat as indicative only."""
+        async with self._lock:
+            await self._ensure_connected()
+            r = await self._measure_ppg(commands.PPG_TYPE_BLOOD_PRESSURE, window=timeout)
+        if not r:
+            return None
+        bp = {"systolic": r["value"], "diastolic": r.get("extra")}
+        self.async_set_updated_data({**(self.data or {}), "bp_systolic": bp["systolic"],
+                                     "bp_diastolic": bp["diastolic"]})
+        return bp
 
     # ---------------------------------------------------------------- sensor poll
     async def _async_update_data(self) -> dict:
@@ -235,9 +258,26 @@ class LefunCoordinator(DataUpdateCoordinator):
                                      "distance_m": day["distance_m"],
                                      "calories": day["calories"],
                                      "steps_date": day["date"]})
-                    hr = await self._measure_ppg(commands.PPG_TYPE_HEART_RATE, window=25.0)
+                    if data.get("firmware") is None:
+                        info = await self._command_with_response(commands.CMD_DEVICE_INFO)
+                        di = commands.parse_device_info(info) if info else None
+                        if di:
+                            data["firmware"] = di["software_version"]
+                            data["model_code"] = di["type_code"]
+                            data["vendor_code"] = di["vendor_code"]
+                    hr = await self._measure_ppg(commands.PPG_TYPE_HEART_RATE, window=22.0)
                     if hr:
-                        data["heart_rate"] = hr
+                        data["heart_rate"] = hr["value"]
+                    spo2 = await self._measure_ppg(commands.PPG_TYPE_BLOOD_OXYGEN, window=22.0)
+                    if spo2:
+                        data["spo2"] = spo2["value"]
+                    night = commands.summarize_sleep(
+                        await self._command_collect(commands.CMD_SLEEP, bytes([0])))
+                    if night:
+                        data.update({"sleep_total_min": night["total_min"],
+                                     "sleep_deep_min": night["deep_min"],
+                                     "sleep_light_min": night["light_min"],
+                                     "sleep_date": night["date"]})
                 except Exception as err:  # noqa: BLE001 - a flaky/failed BLE poll must never
                     # fail the coordinator; location still updates and sensors keep last value.
                     _LOGGER.debug("connected poll skipped: %s", err)

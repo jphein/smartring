@@ -56,6 +56,7 @@ CMD_SLEEP = 0x15
 
 PPG_TYPE_HEART_RATE = 0
 PPG_TYPE_BLOOD_OXYGEN = 1
+PPG_TYPE_BLOOD_PRESSURE = 2
 
 CMD_NAMES = {v: k for k, v in globals().items() if k.startswith("CMD_")}
 
@@ -101,6 +102,13 @@ class RingState:
     distance_m: int | None = None
     steps_date: str | None = None
     heart_rate: int | None = None
+    spo2: int | None = None
+    bp_systolic: int | None = None
+    bp_diastolic: int | None = None
+    sleep_total_min: int | None = None
+    sleep_deep_min: int | None = None
+    sleep_light_min: int | None = None
+    sleep_date: str | None = None
     firmware: str | None = None
     model: str | None = None
     raw: dict[str, str] = field(default_factory=dict)
@@ -277,6 +285,49 @@ class LefunRing:
         self._apply(state, CMD_HR_RESULT, frames)
         return state
 
+    async def async_spo2(self, timeout: float = 30.0) -> RingState:
+        """Start a typed SpO2 measurement and wait for the 0x10 result. Requires the ring worn."""
+        state = RingState(address=self._device.address)
+        frames = await self.async_command(
+            CMD_HR_START, bytes([1 << PPG_TYPE_BLOOD_OXYGEN]), collect=timeout)
+        self._apply(state, CMD_HR_RESULT, frames)
+        return state
+
+    async def async_blood_pressure(self, timeout: float = 30.0) -> RingState:
+        """Experimental cuff-less BP estimate (systolic/diastolic). Indicative only."""
+        state = RingState(address=self._device.address)
+        frames = await self.async_command(
+            CMD_HR_START, bytes([1 << PPG_TYPE_BLOOD_PRESSURE]), collect=timeout)
+        self._apply(state, CMD_HR_RESULT, frames)
+        return state
+
+    async def async_sleep(self, days_ago: int = 0) -> RingState:
+        """Read a night's sleep (0x15): total/deep/light minutes from segment timestamps."""
+        import datetime
+        state = RingState(address=self._device.address)
+        frames = await self.async_command(CMD_SLEEP, bytes([days_ago & 0xFF]), collect=4.0)
+        recs = []
+        for f in frames:
+            p = parse_packet(f)
+            if not p or p[0] != CMD_SLEEP or len(p[1]) < 11:
+                continue
+            b = p[1]
+            if int.from_bytes(b[1:3], "big") == 0 or b[5] == 0xFF:  # empty day / no data
+                continue
+            recs.append(b)
+        if len(recs) >= 2:
+            def dt(b):
+                return datetime.datetime(2000 + b[5], b[6], b[7], b[8], b[9])
+            recs.sort(key=dt)
+            mins = {1: 0, 2: 0, 3: 0}  # awake / light / deep
+            for a, nxt in zip(recs, recs[1:]):
+                mins[a[10]] = mins.get(a[10], 0) + max(int((dt(nxt) - dt(a)).total_seconds() // 60), 0)
+            state.sleep_deep_min = mins[3]
+            state.sleep_light_min = mins[2]
+            state.sleep_total_min = mins[2] + mins[3]
+            state.sleep_date = f"20{recs[0][5]:02d}-{recs[0][6]:02d}-{recs[0][7]:02d}"
+        return state
+
     def _apply(self, state: RingState, cmd: int, frames: list[bytes]) -> None:
         for f in frames:
             parsed = parse_packet(f)
@@ -309,10 +360,21 @@ class LefunRing:
                     state.distance_m = (state.distance_m or 0) + int.from_bytes(params[10:12], "big")
                     state.calories = (state.calories or 0) + int.from_bytes(params[12:14], "big")
             elif rcmd == CMD_HR_RESULT and len(params) >= 2:
-                # 0x10 result: <ppgType><value>. 0x0F is only a start-ack, never a reading.
-                state.heart_rate = params[1] or None
-            elif rcmd == CMD_DEVICE_INFO and params:
-                state.raw["device_info"] = params.hex(" ")
+                # 0x10 PPG result: <ppgType><value[...]>. Route by type; 0x0F is only a start-ack.
+                ptype, val = params[0], params[1]
+                if ptype == (1 << PPG_TYPE_HEART_RATE):
+                    state.heart_rate = val or None
+                elif ptype == (1 << PPG_TYPE_BLOOD_OXYGEN):
+                    state.spo2 = val or None
+                elif ptype == (1 << PPG_TYPE_BLOOD_PRESSURE):
+                    state.bp_systolic = val or None
+                    state.bp_diastolic = params[2] if len(params) > 2 else None
+            elif rcmd == CMD_DEVICE_INFO and len(params) >= 16:
+                pr = lambda b: "".join(ch for ch in b.decode("ascii", "replace") if ch.isprintable()).strip()
+                state.model = pr(params[4:8])
+                sw = int.from_bytes(params[10:12], "big")
+                state.firmware = f"{sw >> 8}.{sw & 0xFF}"
+                state.raw["vendor_code"] = pr(params[12:16])
 
 
 # ---- standalone CLI -----------------------------------------------------------
@@ -352,6 +414,12 @@ async def _cli_main(args: argparse.Namespace) -> int:
                 state = await ring.async_steps(days_ago=args.day)
         elif args.cmd == "activity":
             state = await ring.async_activity(days_ago=args.day)
+        elif args.cmd == "spo2":
+            state = await ring.async_spo2(timeout=args.timeout)
+        elif args.cmd == "bp":
+            state = await ring.async_blood_pressure(timeout=args.timeout)
+        elif args.cmd == "sleep":
+            state = await ring.async_sleep(days_ago=args.day)
         elif args.cmd == "settime":
             ok = await ring.async_set_time()
             print(f"set time: {'ok' if ok else 'failed/no-ack'}")
@@ -384,6 +452,10 @@ def main() -> int:
     st.add_argument("--day", type=int, default=0, help="days ago (0=today … 6)")
     ac = sub.add_parser("activity", help="read+sum the 0x13 intraday step buckets for a day")
     ac.add_argument("--day", type=int, default=0, help="days ago (0=today … 6)")
+    sub.add_parser("spo2", help="measure blood oxygen (SpO₂); wear the ring")
+    sub.add_parser("bp", help="measure blood pressure (experimental); wear the ring")
+    sl = sub.add_parser("sleep", help="read a night's sleep stages (0x15)")
+    sl.add_argument("--day", type=int, default=0, help="days ago (0=last night)")
     sub.add_parser("settime", help="set the ring's clock to now")
     raw = sub.add_parser("raw", help="send one raw command id (+ optional params) and dump responses")
     raw.add_argument("opcode", help="command id, e.g. 0x12")

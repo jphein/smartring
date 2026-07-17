@@ -24,6 +24,14 @@ views:
             needle: true
             severity: { green: 50, yellow: 100, red: 140 }
           - type: gauge
+            entity: sensor.smart_ring_spo2
+            name: SpO₂
+            unit: "%"
+            min: 85
+            max: 100
+            needle: true
+            severity: { red: 85, yellow: 90, green: 95 }
+          - type: gauge
             entity: sensor.smart_ring_battery
             name: Battery
             min: 0
@@ -45,6 +53,14 @@ views:
             name: Location
             icon: mdi:map-marker
             color: blue
+          - type: tile
+            entity: sensor.smart_ring_sleep
+            name: Sleep (last night)
+            icon: mdi:sleep
+          - type: tile
+            entity: sensor.smart_ring_firmware
+            name: Firmware
+            icon: mdi:chip
       - type: history-graph
         title: Heart rate (24h)
         hours_to_show: 24
@@ -71,6 +87,13 @@ views:
             tap_action:
               action: perform-action
               perform_action: lefun_ring.measure_heart_rate
+              data: {}
+          - type: button
+            name: Measure SpO₂
+            icon: mdi:lungs
+            tap_action:
+              action: perform-action
+              perform_action: lefun_ring.measure_spo2
               data: {}
           - type: button
             name: Find ring

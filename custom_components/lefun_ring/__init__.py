@@ -16,7 +16,8 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 
-from .const import DOMAIN, SERVICE_FIND, SERVICE_MEASURE_HR, SERVICE_SET_TIME
+from .const import (DOMAIN, SERVICE_FIND, SERVICE_MEASURE_BP, SERVICE_MEASURE_HR,
+                    SERVICE_MEASURE_SPO2, SERVICE_SET_TIME)
 from .coordinator import LefunCoordinator, LefunError
 
 _LOGGER = logging.getLogger(__name__)
@@ -60,7 +61,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinator: LefunCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
         await coordinator.async_disconnect()
         if not hass.data[DOMAIN]:
-            for svc in (SERVICE_SET_TIME, SERVICE_FIND, SERVICE_MEASURE_HR):
+            for svc in (SERVICE_SET_TIME, SERVICE_FIND, SERVICE_MEASURE_HR,
+                        SERVICE_MEASURE_SPO2, SERVICE_MEASURE_BP):
                 hass.services.async_remove(DOMAIN, svc)
     return unloaded
 
@@ -84,7 +86,15 @@ def _register_services(hass: HomeAssistant) -> None:
     async def measure_heart_rate(call: ServiceCall) -> None:
         await _guard(_resolve(hass, call).measure_heart_rate())
 
+    async def measure_spo2(call: ServiceCall) -> None:
+        await _guard(_resolve(hass, call).measure_spo2())
+
+    async def measure_blood_pressure(call: ServiceCall) -> None:
+        await _guard(_resolve(hass, call).measure_blood_pressure())
+
     reg = hass.services.async_register
     reg(DOMAIN, SERVICE_SET_TIME, set_time, schema=vol.Schema(_TARGET))
     reg(DOMAIN, SERVICE_FIND, find, schema=vol.Schema(_TARGET))
     reg(DOMAIN, SERVICE_MEASURE_HR, measure_heart_rate, schema=vol.Schema(_TARGET))
+    reg(DOMAIN, SERVICE_MEASURE_SPO2, measure_spo2, schema=vol.Schema(_TARGET))
+    reg(DOMAIN, SERVICE_MEASURE_BP, measure_blood_pressure, schema=vol.Schema(_TARGET))

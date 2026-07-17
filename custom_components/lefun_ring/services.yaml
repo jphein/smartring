@@ -30,3 +30,27 @@ measure_heart_rate:
       selector:
         device:
           integration: lefun_ring
+
+measure_spo2:
+  name: Measure SpO₂
+  description: Trigger an on-demand blood-oxygen measurement and update the sensor (~20s).
+  fields:
+    device_id:
+      name: Ring
+      description: Which ring (optional if only one is configured).
+      selector:
+        device:
+          integration: lefun_ring
+
+measure_blood_pressure:
+  name: Measure blood pressure (experimental)
+  description: >
+    Cuff-less PPG blood-pressure estimate (systolic/diastolic). Indicative only — not a
+    medical measurement. Updates sensor.<ring>_bp_* attributes on the coordinator.
+  fields:
+    device_id:
+      name: Ring
+      description: Which ring (optional if only one is configured).
+      selector:
+        device:
+          integration: lefun_ring

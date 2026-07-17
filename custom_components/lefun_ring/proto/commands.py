@@ -98,6 +98,66 @@ def parse_hr(params: bytes) -> Optional[int]:
     return (r["value"] or None) if r else None
 
 
+def parse_device_info(params: bytes) -> Optional[dict]:
+    """0x00 firmware info: supportCode(2 LE) | devTypeReserve(2 BE) | typeCode(4 ASCII)
+    | hwVer(2 BE) | swVer(2 BE) | vendorCode(4 ASCII)."""
+    if len(params) < 16:
+        return None
+
+    def ver(v: int) -> str:
+        return f"{v >> 8}.{v & 0xFF}"
+
+    def txt(b: bytes) -> str:
+        return "".join(ch for ch in b.decode("ascii", "replace") if ch.isprintable()).strip()
+
+    return {
+        "type_code": txt(params[4:8]),
+        "hardware_version": ver(int.from_bytes(params[8:10], "big")),
+        "software_version": ver(int.from_bytes(params[10:12], "big")),
+        "vendor_code": txt(params[12:16]),
+    }
+
+
+# Sleep (0x15): each frame is one segment = a start-timestamp + type; the ring streams
+# totalRecords of them per day. Duration of a segment = gap to the next segment.
+SLEEP_AWAKE, SLEEP_LIGHT, SLEEP_DEEP = 1, 2, 3
+
+
+def parse_sleep_record(params: bytes) -> Optional[dict]:
+    """One 0x15 sleep segment: daysAgo|totalRecords(BE16)|currentRecord(BE16)|Y|M|D|h|m|type."""
+    if len(params) < 11:
+        return None
+    return {
+        "days_ago": params[0],
+        "total_records": int.from_bytes(params[1:3], "big"),
+        "year": params[5], "month": params[6], "day": params[7],
+        "hour": params[8], "minute": params[9], "sleep_type": params[10],
+    }
+
+
+def summarize_sleep(frames: list[bytes]) -> Optional[dict]:
+    """Sum a night's 0x15 segments into total/deep/light/awake minutes (Gadgetbridge's
+    approach: attribute each inter-record gap to the earlier segment's type)."""
+    import datetime
+    recs = [r for f in frames
+            if (r := parse_sleep_record(f)) and r["total_records"] and r["year"] != 0xFF]
+    if len(recs) < 2:
+        return None
+
+    def dt(r):
+        return datetime.datetime(2000 + r["year"], r["month"], r["day"], r["hour"], r["minute"])
+
+    recs.sort(key=dt)
+    mins = {SLEEP_AWAKE: 0, SLEEP_LIGHT: 0, SLEEP_DEEP: 0}
+    for a, b in zip(recs, recs[1:]):
+        mins[a["sleep_type"]] = mins.get(a["sleep_type"], 0) + max(int((dt(b) - dt(a)).total_seconds() // 60), 0)
+    r0 = recs[0]
+    return {"total_min": mins[SLEEP_LIGHT] + mins[SLEEP_DEEP],
+            "deep_min": mins[SLEEP_DEEP], "light_min": mins[SLEEP_LIGHT],
+            "awake_min": mins[SLEEP_AWAKE],
+            "date": f"20{r0['year']:02d}-{r0['month']:02d}-{r0['day']:02d}"}
+
+
 def parse_steps(params: bytes) -> Optional[dict]:
     """0x12 CMD_STEPS_DATA: daysAgo|year|month|day|steps(BE32)|distance_m(BE32)|calories(BE32).
 
