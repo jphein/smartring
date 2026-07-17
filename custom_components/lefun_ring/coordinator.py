@@ -176,6 +176,8 @@ class LefunCoordinator(DataUpdateCoordinator):
                     hrv = commands.parse_hr(hr) if hr else None
                     if hrv:
                         data["heart_rate"] = hrv
-                except LefunError as err:
+                except Exception as err:  # noqa: BLE001 - a flaky/failed BLE poll must never
+                    # fail the coordinator; location still updates and sensors keep last value.
                     _LOGGER.debug("connected poll skipped: %s", err)
+                    self._client = None
         return data

@@ -1,6 +1,6 @@
 # Lefun Ring dashboard — reference copy of a storage-mode Lovelace dashboard.
-# Shows live vitals + room tracking by nearest BLE proxy (sensor.lefun_ring_location).
-# Entity IDs assume the device is titled "Lefun Ring" (slug lefun_ring); adjust if you renamed it.
+# Shows live vitals + room tracking by nearest BLE proxy (sensor.smart_ring_location).
+# Entity IDs use the "smart_ring" slug (device auto-titled "Smart Ring" from its BLE name).
 title: Lefun Ring
 views:
   - title: Lefun Ring
@@ -16,7 +16,7 @@ views:
         square: false
         cards:
           - type: gauge
-            entity: sensor.lefun_ring_heart_rate
+            entity: sensor.smart_ring_heart_rate
             name: Heart rate
             unit: bpm
             min: 40
@@ -24,24 +24,24 @@ views:
             needle: true
             severity: { green: 50, yellow: 100, red: 140 }
           - type: gauge
-            entity: sensor.lefun_ring_battery
+            entity: sensor.smart_ring_battery
             name: Battery
             min: 0
             max: 100
             needle: true
             severity: { green: 50, yellow: 20, red: 0 }
           - type: tile
-            entity: sensor.lefun_ring_steps
+            entity: sensor.smart_ring_steps
             name: Steps
             icon: mdi:shoe-print
           - type: tile
-            entity: sensor.lefun_ring_distance
+            entity: sensor.smart_ring_distance
             name: Distance
           - type: tile
-            entity: sensor.lefun_ring_calories
+            entity: sensor.smart_ring_calories
             name: Calories
           - type: tile
-            entity: sensor.lefun_ring_location
+            entity: sensor.smart_ring_location
             name: Location
             icon: mdi:map-marker
             color: blue
@@ -49,16 +49,16 @@ views:
         title: Heart rate (24h)
         hours_to_show: 24
         entities:
-          - entity: sensor.lefun_ring_heart_rate
+          - entity: sensor.smart_ring_heart_rate
       - type: history-graph
         title: Room over time (tracking)
         hours_to_show: 24
         entities:
-          - entity: sensor.lefun_ring_location
+          - entity: sensor.smart_ring_location
       - type: markdown
         title: Proxies hearing the ring
         content: >
-          {% set p = state_attr('sensor.lefun_ring_location','proxies') %}{% if p %}{%
+          {% set p = state_attr('sensor.smart_ring_location','proxies') %}{% if p %}{%
           for name, rssi in p.items() | sort(attribute='1', reverse=true) %}- **{{
           name.split(' (')[0] }}**: {{ rssi }} dBm
 
