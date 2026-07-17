@@ -15,6 +15,7 @@ HEADER_LEN = 4  # preamble + length + command + checksum
 
 # Command IDs (Gadgetbridge LefunConstants)
 CMD_DEVICE_INFO = 0x00
+CMD_AUTH_BIND = 0x01     # app-level auth/bind the vendor app sends on connect (GB doesn't)
 CMD_BATTERY = 0x03
 CMD_TIME = 0x04
 CMD_PROFILE = 0x06       # user profile (gender/height/weight/age) — drives distance/calories

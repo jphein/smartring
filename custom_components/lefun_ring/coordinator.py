@@ -113,6 +113,13 @@ class LefunCoordinator(DataUpdateCoordinator):
         await client.start_notify(NOTIFY_CHAR, self._on_notify)
         self._client = client
         self._connected_at = self.hass.loop.time()
+        # App-level auth/bind (0x01) — the vendor app sends this on connect; GB doesn't.
+        # This ring may gate activity/step tracking behind it. Best-effort (ring may not ack).
+        try:
+            await self._command(commands.CMD_AUTH_BIND)
+            await asyncio.sleep(0.3)
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("auth-bind on connect failed (non-fatal)")
         # NOTE: do NOT set the clock on every connect — on this firmware setting the time
         # (0x04) appears to reset the current day's step counter, so re-setting it on each
         # keepalive/poll/sync reconnect was zeroing steps right before we read them. Set the
