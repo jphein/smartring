@@ -240,7 +240,10 @@ class LefunCoordinator(DataUpdateCoordinator):
                 seen.append(frame.hex(" "))
                 if p[0] == commands.CMD_PPG_RESULT:
                     r = commands.parse_ppg_result(p[1])
-                    if r and r["value"]:
+                    # only accept a result of the type we asked for — during e.g. a BP measure
+                    # the ring also emits HR-type 0x10 frames; grabbing those gave a wrong
+                    # "systolic" (an HR value) and no diastolic.
+                    if r and r["type_bit"] == (1 << ppg_type) and r["value"]:
                         result = r
                         break
         except Exception as err:  # noqa: BLE001 — ring often drops mid-measure; never crash
