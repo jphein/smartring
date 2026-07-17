@@ -17,22 +17,18 @@ views:
         columns: 2
         square: false
         cards:
-          - type: gauge
+          # HR/SpO2 are on-demand spot readings (unknown between measurements); tiles render
+          # "unknown" gracefully, whereas a gauge card breaks on a non-numeric value.
+          - type: tile
             entity: sensor.smart_ring_heart_rate
             name: Heart rate
-            unit: bpm
-            min: 40
-            max: 180
-            needle: true
-            severity: { green: 50, yellow: 100, red: 140 }
-          - type: gauge
+            icon: mdi:heart-pulse
+            color: red
+          - type: tile
             entity: sensor.smart_ring_spo2
             name: SpO₂
-            unit: "%"
-            min: 85
-            max: 100
-            needle: true
-            severity: { red: 85, yellow: 90, green: 95 }
+            icon: mdi:lungs
+            color: cyan
           - type: gauge
             entity: sensor.smart_ring_battery
             name: Battery
