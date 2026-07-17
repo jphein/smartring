@@ -34,6 +34,7 @@ SERVICE_MEASURE_SPO2 = "measure_spo2"
 SERVICE_MEASURE_BP = "measure_blood_pressure"
 SERVICE_SET_PROFILE = "set_profile"
 SERVICE_SET_CAMERA = "set_camera_mode"
+SERVICE_SYNC = "sync"
 
 # Ring-as-button: the ring fires HA events on shake gestures. Camera (0x0E, while armed via
 # 0x0D) is a clean discrete push; find-phone (0x0A) is edge-detected out of the ring's constant

@@ -47,6 +47,16 @@ set_profile:
       required: true
       selector: { number: { min: 1, max: 110, mode: box } }
 
+sync:
+  name: Sync now
+  description: On-demand connected read of battery + steps/activity (steps are stored on the ring).
+  fields:
+    device_id:
+      name: Ring
+      description: Which ring (optional if only one is configured).
+      selector:
+        device: { integration: lefun_ring }
+
 set_camera_mode:
   name: Camera shake mode (arm/disarm)
   description: >

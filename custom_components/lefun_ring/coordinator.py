@@ -315,6 +315,36 @@ class LefunCoordinator(DataUpdateCoordinator):
         bp = {"systolic": r["value"], "diastolic": r.get("extra")}
         return bp
 
+    async def async_sync(self) -> dict:
+        """On-demand connected read of battery + steps/activity (manual refresh + diagnosis).
+
+        Steps are stored on the ring, so this works whenever it's connected — no need to
+        catch it right after a walk. Captures the raw 0x13/0x12 frames into steps_debug."""
+        data = dict(self.data or {})
+        async with self._lock:
+            try:
+                await self._ensure_connected()
+                bat = await self._command_with_response(commands.CMD_BATTERY)
+                if bat is not None:
+                    data["battery"] = commands.parse_battery(bat)
+                buckets = await self._command_collect(commands.CMD_ACTIVITY, bytes([0]))
+                dbg = [b.hex(" ") for b in buckets][:20]
+                day = commands.sum_activity(buckets)
+                summary = await self._command_with_response(commands.CMD_STEPS, bytes([0]))
+                if summary:
+                    dbg.append("0x12:" + summary.hex(" "))
+                    if day is None:
+                        day = commands.parse_steps(summary)
+                data["steps_debug"] = dbg
+                if day:
+                    data.update({"steps": day["steps"], "distance_m": day["distance_m"],
+                                 "calories": day["calories"], "steps_date": day["date"]})
+            except Exception as err:  # noqa: BLE001 — never crash the service
+                data["steps_debug"] = [f"ERROR {type(err).__name__}: {err}"]
+                self._client = None
+        self.async_set_updated_data(data)
+        return data
+
     # ---------------------------------------------------------------- sensor poll
     async def _async_update_data(self) -> dict:
         """Every tick: recompute location from the advert cache (no connection). Battery/steps/HR

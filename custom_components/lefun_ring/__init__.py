@@ -18,7 +18,7 @@ from homeassistant.helpers import device_registry as dr
 
 from .const import (DOMAIN, SERVICE_FIND, SERVICE_MEASURE_BP, SERVICE_MEASURE_HR,
                     SERVICE_MEASURE_SPO2, SERVICE_SET_CAMERA, SERVICE_SET_PROFILE,
-                    SERVICE_SET_TIME)
+                    SERVICE_SET_TIME, SERVICE_SYNC)
 from .coordinator import LefunCoordinator, LefunError
 from .proto import commands
 
@@ -67,7 +67,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not hass.data[DOMAIN]:
             for svc in (SERVICE_SET_TIME, SERVICE_FIND, SERVICE_MEASURE_HR,
                         SERVICE_MEASURE_SPO2, SERVICE_MEASURE_BP,
-                        SERVICE_SET_PROFILE, SERVICE_SET_CAMERA):
+                        SERVICE_SET_PROFILE, SERVICE_SET_CAMERA, SERVICE_SYNC):
                 hass.services.async_remove(DOMAIN, svc)
     return unloaded
 
@@ -105,6 +105,9 @@ def _register_services(hass: HomeAssistant) -> None:
     async def set_camera_mode(call: ServiceCall) -> None:
         await _guard(_resolve(hass, call).set_camera_mode(call.data["enabled"]))
 
+    async def sync(call: ServiceCall) -> None:
+        await _guard(_resolve(hass, call).async_sync())
+
     reg = hass.services.async_register
     reg(DOMAIN, SERVICE_SET_TIME, set_time, schema=vol.Schema(_TARGET))
     reg(DOMAIN, SERVICE_FIND, find, schema=vol.Schema(_TARGET))
@@ -121,3 +124,4 @@ def _register_services(hass: HomeAssistant) -> None:
     reg(DOMAIN, SERVICE_SET_CAMERA, set_camera_mode, schema=vol.Schema({
         **_TARGET, vol.Required("enabled"): cv.boolean,
     }))
+    reg(DOMAIN, SERVICE_SYNC, sync, schema=vol.Schema(_TARGET))

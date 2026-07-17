@@ -122,6 +122,13 @@ views:
               action: perform-action
               perform_action: lefun_ring.set_time
               data: {}
+          - type: button
+            name: Sync steps
+            icon: mdi:sync
+            tap_action:
+              action: perform-action
+              perform_action: lefun_ring.sync
+              data: {}
       - type: entities
         title: User profile → accurate distance & calories
         entities:
