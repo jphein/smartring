@@ -48,6 +48,12 @@ HEADER_LEN = 4  # preamble + length + command + checksum
 CMD_DEVICE_INFO = 0x00
 CMD_BATTERY = 0x03
 CMD_TIME = 0x04
+CMD_PROFILE = 0x06
+CMD_FIND_PHONE = 0x0A
+CMD_REMOTE_CAMERA = 0x0D
+CMD_REMOTE_CAMERA_TRIGGERED = 0x0E
+GENDER_FEMALE = 0
+GENDER_MALE = 1
 CMD_HR_START = 0x0F      # PPG start; param = ppgType bitmask (1 << type). Response = start-ack.
 CMD_HR_RESULT = 0x10     # PPG result <ppgType><value>, arrives ~15-30s after start
 CMD_STEPS = 0x12
@@ -328,6 +334,49 @@ class LefunRing:
             state.sleep_date = f"20{recs[0][5]:02d}-{recs[0][6]:02d}-{recs[0][7]:02d}"
         return state
 
+    async def async_set_profile(self, sex: str, height_cm: int, weight_kg: int,
+                                age: int) -> bool | None:
+        """Set body metrics (0x06) so distance/calories compute from real data, not defaults."""
+        gender = GENDER_MALE if sex == "male" else GENDER_FEMALE
+        params = bytes([1, gender, height_cm & 0xFF, weight_kg & 0xFF, age & 0xFF])
+        for f in await self.async_command(CMD_PROFILE, params):
+            p = parse_packet(f)
+            if p and p[0] == CMD_PROFILE and len(p[1]) >= 2:
+                return p[1][1] == 1
+        return None
+
+    async def async_set_camera_mode(self, enabled: bool) -> bool | None:
+        """Arm/disarm 'shake for selfie' mode (0x0D). While armed, a shake -> a 0x0E push."""
+        for f in await self.async_command(CMD_REMOTE_CAMERA, bytes([1 if enabled else 0])):
+            p = parse_packet(f)
+            if p and p[0] == CMD_REMOTE_CAMERA and p[1]:
+                return p[1][0] == 1
+        return None
+
+    async def async_listen(self, seconds: float = 30.0, arm_camera: bool = False) -> None:
+        """Print every notify frame for N seconds — do the find-phone / camera shake now to
+        see exactly what the ring sends (calibrates the ring-as-button detection)."""
+        assert self._client is not None, "call async_connect() first"
+        if arm_camera:
+            await self.async_command(CMD_REMOTE_CAMERA, bytes([1]), collect=0.5)
+            print("[camera mode armed — shake to trigger the shutter push (0x0e)]")
+        while not self._queue.empty():
+            self._queue.get_nowait()
+        print(f"[listening {seconds:.0f}s — do the shake gesture(s) now]")
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + seconds
+        while True:
+            rem = deadline - loop.time()
+            if rem <= 0:
+                break
+            try:
+                f = await asyncio.wait_for(self._queue.get(), timeout=rem)
+            except asyncio.TimeoutError:
+                break
+            p = parse_packet(f)
+            tag = f"cmd=0x{p[0]:02x}" if p else "unparsed"
+            print(f"  {f.hex(' ')}   {tag}")
+
     def _apply(self, state: RingState, cmd: int, frames: list[bytes]) -> None:
         for f in frames:
             parsed = parse_packet(f)
@@ -420,6 +469,17 @@ async def _cli_main(args: argparse.Namespace) -> int:
             state = await ring.async_blood_pressure(timeout=args.timeout)
         elif args.cmd == "sleep":
             state = await ring.async_sleep(days_ago=args.day)
+        elif args.cmd == "profile":
+            ok = await ring.async_set_profile(args.sex, args.height, args.weight, args.age)
+            print(f"set profile: {'ok' if ok else 'sent (no ack)'}")
+            return 0
+        elif args.cmd == "camera":
+            ok = await ring.async_set_camera_mode(args.state == "on")
+            print(f"camera mode {args.state}: {'ok' if ok else 'sent (no ack)'}")
+            return 0
+        elif args.cmd == "listen":
+            await ring.async_listen(seconds=args.timeout, arm_camera=args.camera)
+            return 0
         elif args.cmd == "settime":
             ok = await ring.async_set_time()
             print(f"set time: {'ok' if ok else 'failed/no-ack'}")
@@ -456,6 +516,15 @@ def main() -> int:
     sub.add_parser("bp", help="measure blood pressure (experimental); wear the ring")
     sl = sub.add_parser("sleep", help="read a night's sleep stages (0x15)")
     sl.add_argument("--day", type=int, default=0, help="days ago (0=last night)")
+    pf = sub.add_parser("profile", help="set user profile for accurate distance/calories")
+    pf.add_argument("--sex", choices=["male", "female"], required=True)
+    pf.add_argument("--height", type=int, required=True, help="cm")
+    pf.add_argument("--weight", type=int, required=True, help="kg")
+    pf.add_argument("--age", type=int, required=True)
+    cam = sub.add_parser("camera", help="arm/disarm shake-for-selfie mode (0x0D)")
+    cam.add_argument("state", choices=["on", "off"])
+    ln = sub.add_parser("listen", help="dump notify frames — do the find-phone/camera shake to calibrate")
+    ln.add_argument("--camera", action="store_true", help="arm camera mode first")
     sub.add_parser("settime", help="set the ring's clock to now")
     raw = sub.add_parser("raw", help="send one raw command id (+ optional params) and dump responses")
     raw.add_argument("opcode", help="command id, e.g. 0x12")

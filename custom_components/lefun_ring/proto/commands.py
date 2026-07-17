@@ -17,8 +17,14 @@ HEADER_LEN = 4  # preamble + length + command + checksum
 CMD_DEVICE_INFO = 0x00
 CMD_BATTERY = 0x03
 CMD_TIME = 0x04
-CMD_FIND_DEVICE = 0x09   # buzz the ring
-CMD_FIND_PHONE = 0x0A    # device->host "find my phone" (the unsolicited push we see)
+CMD_PROFILE = 0x06       # user profile (gender/height/weight/age) — drives distance/calories
+CMD_FIND_DEVICE = 0x09   # flash the ring's LED (green) to locate it — no vibration motor
+CMD_FIND_PHONE = 0x0A    # device->host "find my phone" push (shake gesture, un-armed)
+CMD_REMOTE_CAMERA = 0x0D          # host->device: arm/disarm camera ("shake for selfie") mode
+CMD_REMOTE_CAMERA_TRIGGERED = 0x0E  # device->host: camera-shutter shake push (while armed)
+
+GENDER_FEMALE = 0
+GENDER_MALE = 1
 CMD_PPG_START = 0x0F     # start a PPG measurement; param = ppgType bitmask (1 << type)
 CMD_PPG_RESULT = 0x10    # result frame: <ppgType><data...> (arrives ~15-30s after start)
 CMD_HR_START = CMD_PPG_START  # back-compat aliases
@@ -68,6 +74,16 @@ def time_payload(when: Optional[datetime.datetime] = None) -> bytes:
     """SET-time params: op=1, year(2000-based), month, day, hour, minute, second."""
     t = when or datetime.datetime.now()
     return bytes([OP_SET, t.year % 100, t.month, t.day, t.hour, t.minute, t.second])
+
+
+def profile_payload(gender: int, height_cm: int, weight_kg: int, age: int) -> bytes:
+    """0x06 SET params: op=1, gender(0=F/1=M), height(cm), weight(kg), age(yr)."""
+    return bytes([OP_SET, gender & 1, height_cm & 0xFF, weight_kg & 0xFF, age & 0xFF])
+
+
+def camera_mode_payload(enabled: bool) -> bytes:
+    """0x0D param: 1 = arm 'shake for selfie' mode, 0 = disarm."""
+    return bytes([1 if enabled else 0])
 
 
 def parse_battery(params: bytes) -> Optional[int]:

@@ -17,8 +17,10 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 
 from .const import (DOMAIN, SERVICE_FIND, SERVICE_MEASURE_BP, SERVICE_MEASURE_HR,
-                    SERVICE_MEASURE_SPO2, SERVICE_SET_TIME)
+                    SERVICE_MEASURE_SPO2, SERVICE_SET_CAMERA, SERVICE_SET_PROFILE,
+                    SERVICE_SET_TIME)
 from .coordinator import LefunCoordinator, LefunError
+from .proto import commands
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SENSOR]
@@ -51,6 +53,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    coordinator.start_keepalive()  # hold a connection so shake pushes fire button events
     _register_services(hass)
     return True
 
@@ -59,10 +62,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
         coordinator: LefunCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
+        await coordinator.stop_keepalive()
         await coordinator.async_disconnect()
         if not hass.data[DOMAIN]:
             for svc in (SERVICE_SET_TIME, SERVICE_FIND, SERVICE_MEASURE_HR,
-                        SERVICE_MEASURE_SPO2, SERVICE_MEASURE_BP):
+                        SERVICE_MEASURE_SPO2, SERVICE_MEASURE_BP,
+                        SERVICE_SET_PROFILE, SERVICE_SET_CAMERA):
                 hass.services.async_remove(DOMAIN, svc)
     return unloaded
 
@@ -92,9 +97,27 @@ def _register_services(hass: HomeAssistant) -> None:
     async def measure_blood_pressure(call: ServiceCall) -> None:
         await _guard(_resolve(hass, call).measure_blood_pressure())
 
+    async def set_profile(call: ServiceCall) -> None:
+        gender = commands.GENDER_MALE if call.data["sex"] == "male" else commands.GENDER_FEMALE
+        await _guard(_resolve(hass, call).set_profile(
+            gender, call.data["height_cm"], call.data["weight_kg"], call.data["age"]))
+
+    async def set_camera_mode(call: ServiceCall) -> None:
+        await _guard(_resolve(hass, call).set_camera_mode(call.data["enabled"]))
+
     reg = hass.services.async_register
     reg(DOMAIN, SERVICE_SET_TIME, set_time, schema=vol.Schema(_TARGET))
     reg(DOMAIN, SERVICE_FIND, find, schema=vol.Schema(_TARGET))
     reg(DOMAIN, SERVICE_MEASURE_HR, measure_heart_rate, schema=vol.Schema(_TARGET))
     reg(DOMAIN, SERVICE_MEASURE_SPO2, measure_spo2, schema=vol.Schema(_TARGET))
     reg(DOMAIN, SERVICE_MEASURE_BP, measure_blood_pressure, schema=vol.Schema(_TARGET))
+    reg(DOMAIN, SERVICE_SET_PROFILE, set_profile, schema=vol.Schema({
+        **_TARGET,
+        vol.Required("sex"): vol.In(["male", "female"]),
+        vol.Required("height_cm"): vol.All(vol.Coerce(int), vol.Range(min=50, max=255)),
+        vol.Required("weight_kg"): vol.All(vol.Coerce(int), vol.Range(min=10, max=255)),
+        vol.Required("age"): vol.All(vol.Coerce(int), vol.Range(min=1, max=110)),
+    }))
+    reg(DOMAIN, SERVICE_SET_CAMERA, set_camera_mode, schema=vol.Schema({
+        **_TARGET, vol.Required("enabled"): cv.boolean,
+    }))

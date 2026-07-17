@@ -32,3 +32,13 @@ SERVICE_FIND = "find"
 SERVICE_MEASURE_HR = "measure_heart_rate"
 SERVICE_MEASURE_SPO2 = "measure_spo2"
 SERVICE_MEASURE_BP = "measure_blood_pressure"
+SERVICE_SET_PROFILE = "set_profile"
+SERVICE_SET_CAMERA = "set_camera_mode"
+
+# Ring-as-button: the ring fires HA events on shake gestures. Camera (0x0E, while armed via
+# 0x0D) is a clean discrete push; find-phone (0x0A) is edge-detected out of the ring's constant
+# heartbeat stream. Requires holding a connection (keepalive), which uses a proxy slot + battery.
+EVENT_BUTTON = f"{DOMAIN}_button"
+KEEPALIVE = True             # hold a persistent connection so shake pushes are caught
+FINDPHONE_GAP = 4.0         # secs of 0x0A silence before a new one counts as a fresh press
+CONNECT_GRACE = 12.0        # ignore find-phone edges in the first N secs after connecting

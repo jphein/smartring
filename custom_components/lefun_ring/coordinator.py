@@ -18,8 +18,9 @@ from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .const import (CTRL_CHAR, DOMAIN, NOTIFY_CHAR, POLL_EVERY,
-                    PROXY_ROOM_OVERRIDES, SERVICE_UUID, UPDATE_INTERVAL_SECONDS)
+from .const import (CONNECT_GRACE, CTRL_CHAR, DOMAIN, EVENT_BUTTON, FINDPHONE_GAP,
+                    KEEPALIVE, NOTIFY_CHAR, POLL_EVERY, PROXY_ROOM_OVERRIDES,
+                    SERVICE_UUID, UPDATE_INTERVAL_SECONDS)
 from .proto import commands
 
 _LOGGER = logging.getLogger(__name__)
@@ -58,13 +59,40 @@ class LefunCoordinator(DataUpdateCoordinator):
         self._lock = asyncio.Lock()
         self._notifies: "asyncio.Queue[bytes]" = asyncio.Queue()
         self._poll_count = 0
+        self._camera_armed = False
+        self._keepalive_task: Optional[asyncio.Task] = None
+        self._stopping = False
+        self._connected_at = 0.0
+        self._last_findphone = 0.0
 
     # ---------------------------------------------------------------- connection
     def _on_disconnect(self, _client: BleakClient) -> None:
         self._client = None
 
+    def _fire_button(self, action: str, raw: bytes) -> None:
+        _LOGGER.debug("ring button: %s (%s)", action, raw.hex(" "))
+        self.hass.bus.async_fire(
+            EVENT_BUTTON, {"address": self.address, "action": action, "raw": raw.hex(" ")})
+
     def _on_notify(self, _char, data: bytearray) -> None:
-        self._notifies.put_nowait(bytes(data))
+        b = bytes(data)
+        self._notifies.put_nowait(b)
+        # Ring-as-button: fire HA events on shake pushes.
+        parsed = commands.parse_packet(b)
+        if not parsed:
+            return
+        cmd, _params = parsed
+        now = self.hass.loop.time()
+        if cmd == commands.CMD_REMOTE_CAMERA_TRIGGERED:
+            self._fire_button("camera", b)                 # discrete, clean (armed via 0x0D)
+        elif cmd == commands.CMD_FIND_PHONE:
+            # The ring streams 0x0A ~1/s as a heartbeat; only treat a 0x0A that follows a gap
+            # (and not right after connect) as a genuine find-phone shake. Calibrate with the
+            # `listen` CLI by doing a real find-phone shake and comparing frames.
+            if (now - self._connected_at > CONNECT_GRACE
+                    and now - self._last_findphone > FINDPHONE_GAP):
+                self._fire_button("find_phone", b)
+            self._last_findphone = now
 
     async def _ensure_connected(self) -> None:
         if self._client is not None and self._client.is_connected:
@@ -80,18 +108,54 @@ class LefunCoordinator(DataUpdateCoordinator):
             BleakClient, ble_device, self.address, disconnected_callback=self._on_disconnect)
         await client.start_notify(NOTIFY_CHAR, self._on_notify)
         self._client = client
+        self._connected_at = self.hass.loop.time()
         # GB sets the ring clock on every connect (fixes step-day attribution) and waits ~1s
         # before any multi-fetch read, or the ring sometimes won't respond. Ring never ACKs.
         try:
             await self._command(commands.CMD_TIME, commands.time_payload())
+            if self._camera_armed:  # re-arm the shake-for-selfie button after a reconnect
+                await self._command(commands.CMD_REMOTE_CAMERA, commands.camera_mode_payload(True))
         except Exception:  # noqa: BLE001 — best effort
-            _LOGGER.debug("set-time on connect failed (non-fatal)")
+            _LOGGER.debug("set-time/camera-arm on connect failed (non-fatal)")
         await asyncio.sleep(1.2)
 
     async def async_disconnect(self) -> None:
         if self._client is not None and self._client.is_connected:
             await self._client.disconnect()
         self._client = None
+
+    # ---------------------------------------------------------------- keepalive (ring-as-button)
+    def start_keepalive(self) -> None:
+        """Hold a persistent connection so the ring's shake pushes fire HA events.
+
+        Costs one of the BLE proxy's ~3 connection slots + faster ring-battery drain, so it
+        only reconnects when a proxy actually hears the ring (no churn while it's away)."""
+        if KEEPALIVE and self._keepalive_task is None:
+            self._keepalive_task = self.hass.async_create_background_task(
+                self._keepalive_loop(), name=f"{DOMAIN}_keepalive")
+
+    async def stop_keepalive(self) -> None:
+        self._stopping = True
+        if self._keepalive_task:
+            self._keepalive_task.cancel()
+            self._keepalive_task = None
+
+    async def _keepalive_loop(self) -> None:
+        backoff = 5
+        while not self._stopping:
+            connected = self._client is not None and self._client.is_connected
+            if not connected:
+                dev = bluetooth.async_ble_device_from_address(self.hass, self.address, True)
+                if dev is not None:  # only try when a proxy hears it — avoid churn when away
+                    try:
+                        async with self._lock:
+                            await self._ensure_connected()
+                        backoff = 5
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.debug("keepalive reconnect failed: %s", err)
+                        backoff = min(backoff * 2, 120)
+            connected = self._client is not None and self._client.is_connected
+            await asyncio.sleep(15 if connected else backoff)
 
     # ---------------------------------------------------------------- protocol
     async def _command(self, cmd: int, params: bytes = b"") -> None:
@@ -176,10 +240,25 @@ class LefunCoordinator(DataUpdateCoordinator):
             await self._command(commands.CMD_TIME, commands.time_payload(when))  # ring doesn't ack
 
     async def find(self) -> None:
-        """Buzz the ring to locate it."""
+        """Flash the ring's LED (green) to locate it — this ring has no vibration motor."""
         async with self._lock:
             await self._ensure_connected()
             await self._command(commands.CMD_FIND_DEVICE)
+
+    async def set_profile(self, gender: int, height_cm: int, weight_kg: int, age: int) -> None:
+        """Set the user profile (0x06) so distance/calories compute from real body metrics."""
+        async with self._lock:
+            await self._ensure_connected()
+            await self._command(commands.CMD_PROFILE,
+                                commands.profile_payload(gender, height_cm, weight_kg, age))
+
+    async def set_camera_mode(self, enabled: bool) -> None:
+        """Arm/disarm 'shake for selfie' mode (0x0D). While armed, a shake fires a 0x0E push
+        -> a `lefun_ring_button` event (action=camera). Persists across reconnects."""
+        self._camera_armed = enabled
+        async with self._lock:
+            await self._ensure_connected()
+            await self._command(commands.CMD_REMOTE_CAMERA, commands.camera_mode_payload(enabled))
 
     async def measure_heart_rate(self, timeout: float = 30.0) -> Optional[int]:
         async with self._lock:

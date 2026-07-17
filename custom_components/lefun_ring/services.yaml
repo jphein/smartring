@@ -11,7 +11,7 @@ set_time:
 
 find:
   name: Find ring
-  description: Buzz the ring to locate it.
+  description: Flash the ring's green LED to locate it (this ring has no vibration motor).
   fields:
     device_id:
       name: Ring
@@ -19,6 +19,49 @@ find:
       selector:
         device:
           integration: lefun_ring
+
+set_profile:
+  name: Set user profile
+  description: Set body metrics so distance & calories compute accurately (not from defaults).
+  fields:
+    device_id:
+      name: Ring
+      description: Which ring (optional if only one is configured).
+      selector:
+        device: { integration: lefun_ring }
+    sex:
+      name: Sex
+      required: true
+      selector:
+        select: { options: [male, female] }
+    height_cm:
+      name: Height (cm)
+      required: true
+      selector: { number: { min: 50, max: 255, unit_of_measurement: cm, mode: box } }
+    weight_kg:
+      name: Weight (kg)
+      required: true
+      selector: { number: { min: 10, max: 255, unit_of_measurement: kg, mode: box } }
+    age:
+      name: Age
+      required: true
+      selector: { number: { min: 1, max: 110, mode: box } }
+
+set_camera_mode:
+  name: Camera shake mode (arm/disarm)
+  description: >
+    Arm "shake for selfie" mode. While armed, shaking the hand fires a `lefun_ring_button`
+    event (action=camera) you can use as a button in automations. Disarm to restore normal use.
+  fields:
+    device_id:
+      name: Ring
+      description: Which ring (optional if only one is configured).
+      selector:
+        device: { integration: lefun_ring }
+    enabled:
+      name: Armed
+      required: true
+      selector: { boolean: }
 
 measure_heart_rate:
   name: Measure heart rate
