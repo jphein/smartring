@@ -47,6 +47,9 @@ input_number:
 # elsewhere are never touched, and a manual "off" sticks until the room actually clears and
 # re-occupies (lights fire only on the occupancy RISING edge).
 # ---------------------------------------------------------------------------------------------
+# Room vote = native nearest-proxy tracker OR Bermuda trilateration (two independent
+# estimators on the same adverts — whichever flips first wins) OR a mmWave radar when
+# one is plugged in.
 template:
   - binary_sensor:
       - name: Laundry occupancy
@@ -54,27 +57,34 @@ template:
         device_class: occupancy
         state: >-
           {{ is_state('binary_sensor.laundry_radar_presence', 'on')
-             or states('sensor.smart_ring_location') in ['Laundry', 'Office'] }}
+             or states('sensor.smart_ring_location') in ['Laundry', 'Office']
+             or is_state('sensor.bermuda_ff_2a_35_a7_44_f3_area', 'Laundry') }}
       - name: Kitchen occupancy
         unique_id: fused_occupancy_kitchen
         device_class: occupancy
         state: >-
           {{ is_state('binary_sensor.kitchen_radar2_presence', 'on')
-             or is_state('sensor.smart_ring_location', 'Kitchen') }}
+             or is_state('sensor.smart_ring_location', 'Kitchen')
+             or is_state('sensor.bermuda_ff_2a_35_a7_44_f3_area', 'Kitchen') }}
       - name: Bedroom occupancy
         unique_id: fused_occupancy_bedroom
         device_class: occupancy
         state: >-
           {{ is_state('binary_sensor.bedroom_radar_presence', 'on')
-             or is_state('sensor.smart_ring_location', 'Bedroom') }}
+             or is_state('sensor.smart_ring_location', 'Bedroom')
+             or is_state('sensor.bermuda_ff_2a_35_a7_44_f3_area', 'Bedroom') }}
       - name: Lunas Room occupancy
         unique_id: fused_occupancy_luna_s_room
         device_class: occupancy
-        state: "{{ is_state('sensor.smart_ring_location', 'Lunas Room') }}"
+        state: >-
+          {{ is_state('sensor.smart_ring_location', 'Lunas Room')
+             or is_state('sensor.bermuda_ff_2a_35_a7_44_f3_area', "Luna's Room") }}
       - name: Shed occupancy
         unique_id: fused_occupancy_shed
         device_class: occupancy
-        state: "{{ is_state('sensor.smart_ring_location', 'Shed') }}"
+        state: >-
+          {{ is_state('sensor.smart_ring_location', 'Shed')
+             or is_state('sensor.bermuda_ff_2a_35_a7_44_f3_area', 'Shed') }}
 
 input_boolean:
   # Only light rooms when the sun is down (occupancy still tracks; just no daytime lights).
