@@ -6,6 +6,12 @@ on:
     - cron: "0 6 * * 1"
   workflow_dispatch:
 
+# validation-only workflow: never let the token write (mitigates a compromised
+# upstream action; hassfest/hacs refs are upstream-documented moving targets that
+# must track HA releases, so we restrict the token instead of SHA-pinning)
+permissions:
+  contents: read
+
 jobs:
   hassfest:
     runs-on: ubuntu-latest
