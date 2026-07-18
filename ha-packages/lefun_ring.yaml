@@ -117,12 +117,42 @@ input_boolean:
 # (a coordinator-stamped timestamp) — more reliable than a trigger-based template sensor here.
 
 script:
-  # Wrapper so dashboards can tile "find the ring" like the iTag find scripts.
+  # Wrappers so dashboards can tile "find X" like the iTag find scripts.
   find_smart_ring:
     alias: Find Smart Ring (flash LED)
     icon: mdi:alarm-light
     sequence:
       - action: lefun_ring.find
+
+  find_moyoung_watch:
+    alias: Find MoYoung Watch (vibrate)
+    icon: mdi:watch-vibrate
+    sequence:
+      - action: moyoung.find
+
+  find_gtx2_daily:
+    alias: Find GTX2 Daily (buzz)
+    icon: mdi:watch-vibrate
+    sequence:
+      - action: gtx2.buzz
+        data:
+          watch: daily
+
+  find_gtx2_spare:
+    alias: Find GTX2 Spare (buzz)
+    icon: mdi:watch-vibrate
+    sequence:
+      - action: gtx2.buzz
+        data:
+          watch: spare
+
+  find_gtx2_watch3:
+    alias: Find GTX2 Watch3 (buzz)
+    icon: mdi:watch-vibrate
+    sequence:
+      - action: gtx2.buzz
+        data:
+          watch: watch3
 
   lefun_ring_apply_profile:
     alias: Apply Lefun ring profile
