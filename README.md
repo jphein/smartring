@@ -16,8 +16,8 @@ no cloud, no vendor app, no phone required.
 
 ## The ring
 
-**[Ti-Vision Smart Fitness Ring](https://www.amazon.com/dp/B0FQTKLSWR)** — titanium, ~$9.99,
-pairs with the *Lefun Health / Life* app. Advertised as *"Health Monitoring with **Sleep
+**[Ti-Vision Smart Fitness Ring](https://www.amazon.com/dp/B0FQTKLSWR)** — ~$9.99, listed as
+*"titanium"* (it is, in fact, cheerfully plastic), pairs with the *Lefun Health / Life* app. Advertised as *"Health Monitoring with **Sleep
 Tracking**, Blood Pressure, Heart Rate."* Spoiler: sleep tracking needs an accelerometer,
 and [there isn't one](#the-headline-finding-) — but heart rate, SpO₂ and a blood-pressure
 estimate are all real, and that's plenty to build presence lighting on.
@@ -52,8 +52,12 @@ what makes room tracking possible.
 
 ## Follow-me lighting
 
-The room you walk into turns its lights **on**; the room you leave turns **off**. Occupancy
-for each room is **fused** from up to three independent estimators, whichever fires first:
+The room you walk into turns its lights **on**; the room you leave turns **off**.
+
+<p align="center"><img src="docs/images/follow-me.svg" width="720" alt="Animation: the ring moves between rooms and each room's lights follow"></p>
+
+Occupancy for each room is **fused** from up to three independent estimators, whichever
+fires first:
 
 ```
    ring advert ─▶ nearest-proxy tracker (custom, recency-weighted) ┐
@@ -66,8 +70,10 @@ for each room is **fused** from up to three independent estimators, whichever fi
   advertises sparsely (~once/minute when idle) and can't wake on motion. Two independent
   BLE estimators (a custom nearest-proxy tracker **and** [Bermuda](https://github.com/agittins/bermuda))
   run in parallel; first to resolve the room wins.
-- **mmWave radar:** instant and holds while you sit still, but identity-blind. Plug one into
-  a room and that room upgrades to sub-second response automatically — no config change.
+- **mmWave radar (optional):** instant and holds while you sit still, but identity-blind.
+  Plug one into a room and that room upgrades to sub-second response automatically — no
+  config change. *(The reference deployment currently runs on the ring's adverts alone;
+  the radar inputs are wired and waiting.)*
 - **Self-healing:** each room manages *itself* (no cross-room reconcile), lights fire only on
   the occupancy **rising edge**, so a manually-darkened room stays dark, and a room left lit
   by a missed transition is cleaned up on the next event. Optional "only when dark" gate.

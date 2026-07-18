@@ -108,8 +108,9 @@
       <div>
         <h2>The $10 experiment</h2>
         <p class="lead">The <a href="https://www.amazon.com/dp/B0FQTKLSWR">Ti-Vision Smart Fitness Ring</a>
-          is a ~$10 titanium ring that pairs with an ad-laden vendor app and speaks the
-          Gadgetbridge-documented <strong>Lefun</strong> BLE protocol. The goal: talk to it directly —
+          is a ~$10 ring — listed as <em>"titanium,"</em> cheerfully plastic in person — that
+          pairs with an ad-laden vendor app and speaks the Gadgetbridge-documented
+          <strong>Lefun</strong> BLE protocol. The goal: talk to it directly —
           no cloud, no app, no phone — and see what it can really do.</p>
         <p class="lead">The answer rewired the whole project.</p>
       </div>
@@ -147,9 +148,12 @@
 
   <section id="lighting">
     <h2><span class="em">💡</span>Follow-me lighting</h2>
-    <p class="lead">Walk into a room, its lights come on; leave, they go off. Each room's
-      occupancy is <strong>fused</strong> from up to three independent estimators — whichever
-      resolves the room first wins:</p>
+    <p class="lead">Walk into a room, its lights come on; leave, they go off.</p>
+    <figure style="margin:18px 0">
+      <img src="images/follow-me.svg" alt="Animation: the ring moves between rooms and each room's lights follow" style="width:100%;border-radius:14px;background:transparent;box-shadow:none">
+    </figure>
+    <p class="lead">Each room's occupancy is <strong>fused</strong> from up to three
+      independent estimators — whichever resolves the room first wins:</p>
     <div class="flow"><pre>
  ring advert ─▶  nearest-proxy tracker (custom, recency-weighted) ┐
  ring advert ─▶  Bermuda BLE trilateration                        ├─▶  room       ─▶  that room's
@@ -159,9 +163,10 @@
       <div class="card"><h3>🔵 BLE — knows <em>who</em></h3><p>Two independent estimators on the
         ring's adverts (a custom nearest-proxy tracker + Bermuda). Identity-aware, whole-house,
         but slow — a cheap ring advertises sparsely and can't wake on motion.</p></div>
-      <div class="card"><h3>📡 mmWave — knows <em>now</em></h3><p>Instant, holds while you sit
-        still, but identity-blind. Plug a radar into a room and it upgrades to sub-second
-        response automatically — zero config change.</p></div>
+      <div class="card"><h3>📡 mmWave — knows <em>now</em> (optional)</h3><p>Instant, holds
+        while you sit still, but identity-blind. Plug a radar into a room and it upgrades to
+        sub-second response automatically — zero config change. The reference deployment
+        currently runs on the ring's adverts alone.</p></div>
       <div class="card"><h3>🩹 Self-healing</h3><p>Each room manages itself; lights fire on the
         occupancy rising edge only. A manually-darkened room stays dark; a room left lit by a
         missed transition is cleaned up on the next event.</p></div>
