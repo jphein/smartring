@@ -24,6 +24,9 @@ views:
           - entity: sensor.smart_ring_location
             name: Ring is in
             icon: mdi:map-marker
+          - entity: sensor.bermuda_ff_2a_35_a7_44_f3_area
+            name: Ring is in (Bermuda)
+            icon: mdi:map-marker-radius
           - entity: sensor.lefun_ring_last_seen
             name: Last checked in
             icon: mdi:clock-check-outline
