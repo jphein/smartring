@@ -75,6 +75,12 @@ for each room is **fused** from up to three independent estimators, whichever fi
 The result degrades gracefully at every layer: radar down → BLE carries it; one BLE tracker
 glitches → the other covers; ring out of range → the room simply clears.
 
+**Hardware requirement:** room tracking needs **[Bluetooth proxies](https://esphome.io/components/bluetooth_proxy.html)**
+— one per room you want tracked. This is well-trodden Home Assistant territory: any ESPHome
+node with `bluetooth_proxy:` enabled works, and the proxies can do double duty (this house
+runs a fleet of **ESP32-C3** devkits that simultaneously proxy adverts, hold iTag button
+connections, and bridge BLE battery monitors).
+
 ## Hardware findings (unit probed: `FF:2A:35:A7:44:F3`)
 
 - **SoC:** Nordic nRF-class — exposes the genuine Nordic Secure DFU service `0xFE59`. Likely a
