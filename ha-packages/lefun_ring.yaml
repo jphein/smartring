@@ -39,6 +39,14 @@ input_number:
     step: 1
     mode: box
 
+input_text:
+  # Last real room the follow-me automation processed. Lets us tell a genuine room CHANGE from
+  # an away-blip re-entry (the ring advertises sparsely, so "away for 20s -> same room" happens
+  # while you never moved) — re-entries must NOT re-light a room you manually darkened.
+  ring_prev_area:
+    name: Ring follow-me — previous area
+    icon: mdi:map-marker-path
+
 input_boolean:
   # Master switch for the whole follow-me behaviour.
   ring_follow_lights:
@@ -154,12 +162,23 @@ automation:
               data:
                 area: "{{ repeat.item }}"
                 turn: "off"
-      # Turn ON the room the ring is in — if its toggle is on.
+      # Turn ON the room the ring is in — if its toggle is on, AND this is a genuine room
+      # change (or the master-toggle manual re-sync). An away-blip back into the SAME room
+      # (sparse ring adverts) must not re-light a room that was manually turned off.
       - if:
           - condition: template
-            value_template: "{{ is_state('input_boolean.ring_follow_' ~ new_area, 'on') }}"
+            value_template: >-
+              {{ is_state('input_boolean.ring_follow_' ~ new_area, 'on')
+                 and (trigger.entity_id == 'input_boolean.ring_follow_lights'
+                      or new_area != states('input_text.ring_prev_area')) }}
         then:
           - action: script.ring_set_room_lights
             data:
               area: "{{ new_area }}"
               turn: "on"
+      # Remember the room we just processed (survives restarts; away/unknown never gets here).
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.ring_prev_area
+        data:
+          value: "{{ new_area }}"
