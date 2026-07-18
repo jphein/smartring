@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>smartring — cloud-free presence lighting from a $10 ring</title>
+<meta name="description" content="Reverse-engineering a $10 Lefun-protocol BLE smart ring into cloud-free, identity-aware follow-me lighting for Home Assistant.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='36' r='20' fill='none' stroke='%237c5cff' stroke-width='7'/%3E%3Ccircle cx='32' cy='14' r='7' fill='%2300d0b0'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#f6f7fb; --panel:#ffffff; --ink:#161824; --muted:#5b6072; --line:#e5e7f0;
+    --accent:#6a4cff; --accent2:#00b39a; --ok:#12a150; --bad:#e5484d; --code:#f0f1f7;
+    --shadow:0 1px 3px rgba(20,24,40,.06),0 8px 30px rgba(20,24,40,.06);
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#0c0d14; --panel:#14161f; --ink:#e9eaf2; --muted:#9aa0b4; --line:#242736;
+    --accent:#8b74ff; --accent2:#22d3bb; --ok:#3ad07f; --bad:#ff6b6f; --code:#171a24;
+    --shadow:0 1px 3px rgba(0,0,0,.4),0 12px 40px rgba(0,0,0,.35);
+  }}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:900px;margin:0 auto;padding:0 20px}
+  code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  code{background:var(--code);padding:.12em .4em;border-radius:5px;font-size:.88em}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:12px;padding:16px;
+    overflow-x:auto;font-size:.86em;line-height:1.5}
+
+  header.hero{padding:76px 0 54px;text-align:center;position:relative;overflow:hidden}
+  header.hero::before{content:"";position:absolute;inset:-40% -20% auto;height:420px;
+    background:radial-gradient(60% 100% at 50% 0,rgba(124,92,255,.22),transparent 70%);
+    z-index:0}
+  .hero-ring{width:78px;height:78px;position:relative;z-index:1;margin:0 auto 6px;display:block}
+  h1{font-size:clamp(2.1rem,5vw,3.1rem);margin:.15em 0 .1em;letter-spacing:-.02em;position:relative;z-index:1}
+  .tag{color:var(--muted);font-size:1.12rem;max-width:640px;margin:.4em auto 1.4em;position:relative;z-index:1}
+  .badges{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;position:relative;z-index:1}
+  .badge{font-size:.78rem;padding:5px 11px;border-radius:999px;border:1px solid var(--line);
+    background:var(--panel);color:var(--muted)}
+  .badge.on{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,var(--line))}
+  .cta{display:inline-flex;gap:8px;margin-top:22px;position:relative;z-index:1}
+  .btn{padding:11px 20px;border-radius:11px;font-weight:600;font-size:.95rem}
+  .btn.primary{background:var(--accent);color:#fff}
+  .btn.ghost{border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+
+  section{padding:34px 0;border-top:1px solid var(--line)}
+  h2{font-size:1.5rem;letter-spacing:-.01em;margin:.2em 0 .5em}
+  h2 .em{font-size:1.15em;vertical-align:-2px;margin-right:.3em}
+  .lead{color:var(--muted)}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:center}
+  @media(max-width:680px){.cols{grid-template-columns:1fr}}
+  figure{margin:0}
+  figure img{width:100%;border-radius:14px;box-shadow:var(--shadow);display:block}
+  figcaption{color:var(--muted);font-size:.85rem;margin-top:8px;text-align:center}
+
+  .callout{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent2);
+    border-radius:12px;padding:16px 18px;margin:16px 0;box-shadow:var(--shadow)}
+
+  table{width:100%;border-collapse:collapse;margin:8px 0;font-size:.94rem}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:.8rem;text-transform:uppercase;letter-spacing:.04em}
+  .yes{color:var(--ok);font-weight:600}
+  .no{color:var(--bad);font-weight:600}
+
+  .cards{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+  @media(max-width:680px){.cards{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow)}
+  .card h3{margin:.1em 0 .3em;font-size:1.02rem}
+  .card p{margin:0;color:var(--muted);font-size:.92rem}
+
+  .flow{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;
+    box-shadow:var(--shadow);overflow-x:auto}
+  .flow pre{background:none;border:none;padding:0;margin:0;color:var(--ink)}
+
+  footer{padding:40px 0 60px;color:var(--muted);font-size:.9rem;text-align:center;border-top:1px solid var(--line)}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <svg class="hero-ring" viewBox="0 0 64 64" aria-hidden="true">
+      <circle cx="32" cy="36" r="20" fill="none" stroke="var(--accent)" stroke-width="7"/>
+      <circle cx="32" cy="14" r="7" fill="var(--accent2)"/>
+    </svg>
+    <h1>smartring</h1>
+    <p class="tag">A cloud-free Home Assistant integration for a <strong>$10 BLE smart ring</strong> —
+      and the identity-aware <strong>follow-me lighting</strong> system built on top of it.</p>
+    <div class="badges">
+      <span class="badge on">☁︎ no cloud</span>
+      <span class="badge on">📵 no vendor app</span>
+      <span class="badge">🏠 Home Assistant</span>
+      <span class="badge">⚖︎ AGPL-3.0</span>
+    </div>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/jphein/smartring">View on GitHub →</a>
+      <a class="btn ghost" href="#lighting">How it works</a>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section>
+    <div class="cols">
+      <div>
+        <h2>The $10 experiment</h2>
+        <p class="lead">The <a href="https://www.amazon.com/dp/B0FQTKLSWR">Ti-Vision Smart Fitness Ring</a>
+          is a ~$10 titanium ring that pairs with an ad-laden vendor app and speaks the
+          Gadgetbridge-documented <strong>Lefun</strong> BLE protocol. The goal: talk to it directly —
+          no cloud, no app, no phone — and see what it can really do.</p>
+        <p class="lead">The answer rewired the whole project.</p>
+      </div>
+      <figure>
+        <img src="images/ring-pcb.jpg" alt="The ring's circuit board seen through its clear housing">
+        <figcaption>The PCB through the clear housing — Nordic-class MCU, optical PPG die, and&nbsp;<em>no working IMU</em>.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="finding">
+    <h2><span class="em">🔬</span>The headline finding</h2>
+    <p class="lead">The listing sells <em>sleep tracking</em>. The app shows steps and
+      "shake for camera." Exhaustive testing proved a single thing that explains all of it:</p>
+    <div class="callout">
+      <strong>This ring has no functional accelerometer.</strong> Every <em>optical</em> feature
+      works; every <em>motion</em> feature is dead. It runs generic Lefun firmware on hardware
+      carrying only the PPG die — so it politely <em>advertises</em> the step/sleep/gesture
+      commands, then answers them with zeros.
+    </div>
+    <table>
+      <thead><tr><th>Feature</th><th>Sensor</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>Heart rate</td><td>optical PPG</td><td class="yes">✔ works</td></tr>
+        <tr><td>SpO₂</td><td>optical PPG</td><td class="yes">✔ works</td></tr>
+        <tr><td>Blood pressure (estimate)</td><td>optical PPG</td><td class="yes">✔ single value</td></tr>
+        <tr><td>Steps · Sleep</td><td>accelerometer</td><td class="no">✘ dead — always 0</td></tr>
+        <tr><td>Shake → camera / find-phone</td><td>accelerometer</td><td class="no">✘ dead — never fires</td></tr>
+      </tbody>
+    </table>
+    <p class="lead">The pivot: with no shake-button to catch, there's no reason to hold a BLE
+      connection open. Left free to <strong>advertise</strong>, the ring becomes a room beacon —
+      and that's the foundation for presence lighting.</p>
+  </section>
+
+  <section id="lighting">
+    <h2><span class="em">💡</span>Follow-me lighting</h2>
+    <p class="lead">Walk into a room, its lights come on; leave, they go off. Each room's
+      occupancy is <strong>fused</strong> from up to three independent estimators — whichever
+      resolves the room first wins:</p>
+    <div class="flow"><pre>
+ ring advert ─▶  nearest-proxy tracker (custom, recency-weighted) ┐
+ ring advert ─▶  Bermuda BLE trilateration                        ├─▶  room       ─▶  that room's
+ mmWave      ─▶  ESPHome radar presence (instant, identity-blind) ┘    occupancy       button_lights
+                                                                       (OR-fused)</pre></div>
+    <div class="cards" style="margin-top:16px">
+      <div class="card"><h3>🔵 BLE — knows <em>who</em></h3><p>Two independent estimators on the
+        ring's adverts (a custom nearest-proxy tracker + Bermuda). Identity-aware, whole-house,
+        but slow — a cheap ring advertises sparsely and can't wake on motion.</p></div>
+      <div class="card"><h3>📡 mmWave — knows <em>now</em></h3><p>Instant, holds while you sit
+        still, but identity-blind. Plug a radar into a room and it upgrades to sub-second
+        response automatically — zero config change.</p></div>
+      <div class="card"><h3>🩹 Self-healing</h3><p>Each room manages itself; lights fire on the
+        occupancy rising edge only. A manually-darkened room stays dark; a room left lit by a
+        missed transition is cleaned up on the next event.</p></div>
+      <div class="card"><h3>🛡️ Graceful degradation</h3><p>Radar down → BLE carries it. One
+        tracker glitches → the other covers. Ring out of range → the room simply clears. No
+        single point of failure.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="em">🧩</span>What's in the repo</h2>
+    <table>
+      <tbody>
+        <tr><td><code>lefun_ring.py</code></td><td>Standalone Python CLI + library for the ring's native BLE protocol. No HA needed.</td></tr>
+        <tr><td><code>custom_components/lefun_ring/</code></td><td>Home Assistant integration — routes through HA Bluetooth (local adapter or ESPHome proxies), sensors + services + real-time room tracking.</td></tr>
+        <tr><td><code>ha-packages/lefun_ring.yaml</code></td><td>The presence-lighting engine: fused occupancy, follow-me automation, per-room toggles, finder scripts.</td></tr>
+        <tr><td><code>dashboard/</code></td><td>Lovelace dashboards for the ring and the BLE-proxy fleet.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2><span class="em">⚡</span>Quick start</h2>
+    <pre>python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+
+# one-time bond, then read live data
+bluetoothctl pair &lt;RING_MAC&gt; &amp;&amp; bluetoothctl trust &lt;RING_MAC&gt;
+.venv/bin/python lefun_ring.py --address &lt;RING_MAC&gt; hr</pre>
+    <p class="lead">For Home Assistant: copy <code>custom_components/lefun_ring/</code> into your
+      config, restart, and add the <em>Lefun Ring</em> integration —
+      <a href="https://github.com/jphein/smartring#install">full instructions →</a></p>
+  </section>
+
+</main>
+
+<footer class="wrap">
+  Protocol ported from <a href="https://codeberg.org/Freeyourgadget/Gadgetbridge">Gadgetbridge</a> ·
+  trilateration by <a href="https://github.com/agittins/bermuda">Bermuda</a> ·
+  licensed <a href="https://github.com/jphein/smartring/blob/main/LICENSE">AGPL-3.0</a><br>
+  Not affiliated with Lefun or Ti-Vision. Built with Home Assistant + ESPHome.
+</footer>
+
+</body>
+</html>

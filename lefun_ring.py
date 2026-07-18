@@ -15,9 +15,9 @@ notify 0x2D00; request preamble 0xAB, response preamble 0x5A; bit-wise checksum)
         await ring.async_disconnect()
 
     CLI usage:
-        python lefun_ring.py --address FF:2A:35:A7:44:F3 poll
-        python lefun_ring.py --address FF:2A:35:A7:44:F3 hr
-        python lefun_ring.py --address FF:2A:35:A7:44:F3 raw 0x00
+        python lefun_ring.py --address <RING_MAC> poll
+        python lefun_ring.py --address <RING_MAC> hr
+        python lefun_ring.py --address <RING_MAC> raw 0x00
 """
 from __future__ import annotations
 
