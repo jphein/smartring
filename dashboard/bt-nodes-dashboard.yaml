@@ -1,0 +1,145 @@
+# BT Nodes dashboard — BLE proxy fleet health + trackers at a glance.
+# Storage-mode; deploy via ha_dash.py to url_path "bt-nodes" (create the dashboard first).
+title: BT Nodes
+views:
+  - title: Fleet
+    path: fleet
+    icon: mdi:bluetooth
+    cards:
+      - type: markdown
+        content: |
+          ## 📡 BLE Proxy Fleet
+          Seven ESPHome proxies: room presence (ring + tags + phone), iTag buttons, and
+          advert forwarding. Greyed rows = node offline.
+      - type: markdown
+        title: Proxies hearing the ring (live)
+        content: >
+          {% set a = state_attr('sensor.smart_ring_location','ages_s') or {} %}
+          {% set p = state_attr('sensor.smart_ring_location','proxies') or {} %}
+          {% if a %}{% for name, age in a.items() | sort(attribute='1') %}-
+          **{{ name.split(' (')[0] }}** — heard {{ age | round(0) | int }}s ago
+          ({{ p.get(name, '?') }} dBm)
+
+          {% endfor %}{% else %}_No proxy has heard the ring recently
+          (ring: {{ states('sensor.smart_ring_location') }})._{% endif %}
+      - type: entities
+        title: Node status
+        show_header_toggle: false
+        entities:
+          - entity: light.laundry_laundry_ble_proxy_bt_led
+            name: laundry-ble-proxy (BT LED)
+          - entity: binary_sensor.laundry_ble_proxy_2_jps_phone
+            name: laundry-ble-proxy-2 (sees JP's phone)
+          - entity: light.kitchen_kitchen_ble_proxy_bt_led
+            name: kitchen-ble-proxy (BT LED)
+          - entity: light.bedroom_bedroom_ble_proxy_bt_led
+            name: bedroom-ble-proxy (BT LED)
+          - entity: light.bathroom_lunas_room_ble_proxy_bt_led
+            name: lunas-room-ble-proxy (BT LED)
+          - entity: binary_sensor.shed_ble_proxy_jps_phone
+            name: shed-ble-proxy (sees JP's phone)
+          - entity: binary_sensor.office_ble_proxy_jps_phone
+            name: office-ble-proxy (sees JP's phone)
+      - type: entities
+        title: Trackers
+        show_header_toggle: false
+        entities:
+          - entity: sensor.smart_ring_location
+            name: 💍 Ring (native)
+          - entity: sensor.bermuda_ff_2a_35_a7_44_f3_area
+            name: 💍 Ring (Bermuda)
+          - entity: sensor.bags_tag_room
+            name: 🎒 Bags tag
+          - entity: sensor.tag_a_room
+            name: 🏷 Tag A
+          - entity: sensor.tag_b_room
+            name: 🏷 Tag B
+          - entity: sensor.tag_c_room
+            name: 🏷 Tag C
+      - type: entities
+        title: Room occupancy (fused radar ⊕ ring ⊕ Bermuda)
+        show_header_toggle: false
+        entities:
+          - binary_sensor.laundry_occupancy
+          - binary_sensor.kitchen_occupancy
+          - binary_sensor.bedroom_occupancy
+          - binary_sensor.lunas_room_occupancy
+          - binary_sensor.shed_occupancy
+      - type: entities
+        title: iTag links — which node holds which tag
+        show_header_toggle: false
+        entities:
+          - type: section
+            label: laundry-ble-proxy
+          - entity: binary_sensor.laundry_laundry_ble_proxy_itag_a_connected
+            name: iTag A connected
+          - entity: sensor.laundry_laundry_ble_proxy_itag_a_link_rssi
+            name: iTag A RSSI
+          - entity: binary_sensor.laundry_laundry_ble_proxy_itag_b_connected
+            name: iTag B connected
+          - entity: sensor.laundry_laundry_ble_proxy_itag_b_link_rssi
+            name: iTag B RSSI
+          - entity: binary_sensor.laundry_laundry_ble_proxy_itag_c_connected
+            name: iTag C connected
+          - entity: sensor.laundry_laundry_ble_proxy_itag_c_link_rssi
+            name: iTag C RSSI
+          - type: section
+            label: kitchen-ble-proxy
+          - entity: binary_sensor.kitchen_kitchen_ble_proxy_itag_a_connected
+            name: iTag A connected
+          - entity: sensor.kitchen_kitchen_ble_proxy_itag_a_link_rssi
+            name: iTag A RSSI
+          - entity: binary_sensor.kitchen_kitchen_ble_proxy_itag_b_connected
+            name: iTag B connected
+          - entity: sensor.kitchen_kitchen_ble_proxy_itag_b_link_rssi
+            name: iTag B RSSI
+          - entity: binary_sensor.kitchen_kitchen_ble_proxy_itag_c_connected
+            name: iTag C connected
+          - entity: sensor.kitchen_kitchen_ble_proxy_itag_c_link_rssi
+            name: iTag C RSSI
+          - type: section
+            label: bedroom-ble-proxy
+          - entity: binary_sensor.bedroom_bedroom_ble_proxy_itag_a_connected
+            name: iTag A connected
+          - entity: sensor.bedroom_bedroom_ble_proxy_itag_a_link_rssi
+            name: iTag A RSSI
+          - entity: binary_sensor.bedroom_bedroom_ble_proxy_itag_b_connected
+            name: iTag B connected
+          - entity: sensor.bedroom_bedroom_ble_proxy_itag_b_link_rssi
+            name: iTag B RSSI
+          - entity: binary_sensor.bedroom_bedroom_ble_proxy_itag_c_connected
+            name: iTag C connected
+          - entity: sensor.bedroom_bedroom_ble_proxy_itag_c_link_rssi
+            name: iTag C RSSI
+          - type: section
+            label: lunas-room-ble-proxy
+          - entity: binary_sensor.bathroom_lunas_room_ble_proxy_itag_a_connected
+            name: iTag A connected
+          - entity: sensor.luna_s_room_lunas_room_ble_proxy_itag_a_link_rssi
+            name: iTag A RSSI
+          - entity: binary_sensor.bathroom_lunas_room_ble_proxy_itag_b_connected
+            name: iTag B connected
+          - entity: sensor.luna_s_room_lunas_room_ble_proxy_itag_b_link_rssi
+            name: iTag B RSSI
+          - entity: binary_sensor.bathroom_lunas_room_ble_proxy_itag_c_connected
+            name: iTag C connected
+          - entity: sensor.luna_s_room_lunas_room_ble_proxy_itag_c_link_rssi
+            name: iTag C RSSI
+      - type: entities
+        title: Bags tag
+        show_header_toggle: false
+        entities:
+          - entity: sensor.laundry_laundry_ble_proxy_2_bags_tag_battery
+            name: Battery
+          - entity: binary_sensor.laundry_laundry_ble_proxy_2_bags_tag_ringing
+            name: Ringing
+          - entity: button.laundry_laundry_ble_proxy_2_find_bags_tag
+            name: Find (beep)
+          - entity: button.laundry_laundry_ble_proxy_2_stop_bags_tag
+            name: Stop
+          - entity: button.laundry_laundry_ble_proxy_2_read_bags_battery
+            name: Read battery
+      - type: markdown
+        content: >
+          _Node notes: tags A & C look battery-dead (no node holds them). Office node is
+          unplugged. LED lights double as node-online indicators — greyed = offline._

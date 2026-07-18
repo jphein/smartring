@@ -117,6 +117,13 @@ input_boolean:
 # (a coordinator-stamped timestamp) — more reliable than a trigger-based template sensor here.
 
 script:
+  # Wrapper so dashboards can tile "find the ring" like the iTag find scripts.
+  find_smart_ring:
+    alias: Find Smart Ring (flash LED)
+    icon: mdi:alarm-light
+    sequence:
+      - action: lefun_ring.find
+
   lefun_ring_apply_profile:
     alias: Apply Lefun ring profile
     icon: mdi:account-cog
