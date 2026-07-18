@@ -115,7 +115,14 @@ bluetoothctl pair <RING_MAC> && bluetoothctl trust <RING_MAC>
 .venv/bin/python lefun_ring.py --address <RING_MAC> poll
 ```
 
-### Home Assistant
+### Home Assistant — via HACS (recommended)
+
+[![Open your Home Assistant instance and add this repository inside HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=jphein&repository=smartring&category=integration)
+
+Or manually: **HACS → ⋮ → Custom repositories** → add `https://github.com/jphein/smartring`
+(type: *Integration*) → install **Lefun Smart Ring** → restart HA.
+
+### Home Assistant — manual
 
 1. Copy `custom_components/lefun_ring/` into your HA `config/custom_components/`.
 2. Restart HA → **Settings → Devices & Services → Add Integration → "Lefun Ring"**
