@@ -124,6 +124,31 @@ script:
     sequence:
       - action: lefun_ring.find
 
+  # Blink a BLE proxy node's blue LED so you can find the physical node.
+  # (The nodes' own logic re-asserts the LED on the next iTag connect/disconnect.)
+  blink_node_led:
+    alias: Blink a node's BT LED
+    icon: mdi:led-on
+    mode: parallel
+    max: 8
+    fields:
+      led:
+        description: the node's BT LED light entity
+    sequence:
+      - repeat:
+          count: 8
+          sequence:
+            - action: light.turn_on
+              target:
+                entity_id: "{{ led }}"
+            - delay:
+                milliseconds: 250
+            - action: light.turn_off
+              target:
+                entity_id: "{{ led }}"
+            - delay:
+                milliseconds: 250
+
   find_moyoung_watch:
     alias: Find MoYoung Watch (vibrate)
     icon: mdi:watch-vibrate
