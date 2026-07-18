@@ -139,6 +139,19 @@ class LefunCoordinator(DataUpdateCoordinator):
             await self._client.disconnect()
         self._client = None
 
+    async def _release(self) -> None:
+        """Drop the BLE link after an operation (unless KEEPALIVE holds it deliberately).
+
+        A connected ring can't advertise, and the proxy-side link otherwise lingers ~10 min
+        after a poll — observed blinding room tracking (away 01:45->01:56) until it timed out.
+        """
+        if KEEPALIVE:
+            return
+        try:
+            await self.async_disconnect()
+        except Exception:  # noqa: BLE001 — releasing is best-effort
+            self._client = None
+
     # ---------------------------------------------------------------- keepalive (ring-as-button)
     def start_keepalive(self) -> None:
         """Hold a persistent connection so the ring's shake pushes fire HA events.
@@ -263,34 +276,50 @@ class LefunCoordinator(DataUpdateCoordinator):
     # ---------------------------------------------------------------- operations
     async def set_time(self, when: Optional[datetime] = None) -> None:
         async with self._lock:
-            await self._ensure_connected()
-            await self._command(commands.CMD_TIME, commands.time_payload(when))  # ring doesn't ack
+            try:
+                await self._ensure_connected()
+                await self._command(commands.CMD_TIME, commands.time_payload(when))  # no ack
+            finally:
+                await self._release()
 
     async def find(self) -> None:
         """Flash the ring's LED (green) to locate it — this ring has no vibration motor."""
         async with self._lock:
-            await self._ensure_connected()
-            await self._command(commands.CMD_FIND_DEVICE)
+            try:
+                await self._ensure_connected()
+                await self._command(commands.CMD_FIND_DEVICE)
+            finally:
+                await self._release()
 
     async def set_profile(self, gender: int, height_cm: int, weight_kg: int, age: int) -> None:
         """Set the user profile (0x06) so distance/calories compute from real body metrics."""
         async with self._lock:
-            await self._ensure_connected()
-            await self._command(commands.CMD_PROFILE,
-                                commands.profile_payload(gender, height_cm, weight_kg, age))
+            try:
+                await self._ensure_connected()
+                await self._command(commands.CMD_PROFILE,
+                                    commands.profile_payload(gender, height_cm, weight_kg, age))
+            finally:
+                await self._release()
 
     async def set_camera_mode(self, enabled: bool) -> None:
         """Arm/disarm 'shake for selfie' mode (0x0D). While armed, a shake fires a 0x0E push
         -> a `lefun_ring_button` event (action=camera). Persists across reconnects."""
         self._camera_armed = enabled
         async with self._lock:
-            await self._ensure_connected()
-            await self._command(commands.CMD_REMOTE_CAMERA, commands.camera_mode_payload(enabled))
+            try:
+                await self._ensure_connected()
+                await self._command(commands.CMD_REMOTE_CAMERA,
+                                    commands.camera_mode_payload(enabled))
+            finally:
+                await self._release()
 
     async def measure_heart_rate(self, timeout: float = 45.0) -> Optional[int]:
         async with self._lock:
-            await self._ensure_connected()
-            r = await self._measure_ppg(commands.PPG_TYPE_HEART_RATE, window=timeout)
+            try:
+                await self._ensure_connected()
+                r = await self._measure_ppg(commands.PPG_TYPE_HEART_RATE, window=timeout)
+            finally:
+                await self._release()
         hr = r["value"] if r else None
         nd = dict(self.data or {})
         if hr:
@@ -300,8 +329,11 @@ class LefunCoordinator(DataUpdateCoordinator):
 
     async def measure_spo2(self, timeout: float = 45.0) -> Optional[int]:
         async with self._lock:
-            await self._ensure_connected()
-            r = await self._measure_ppg(commands.PPG_TYPE_BLOOD_OXYGEN, window=timeout)
+            try:
+                await self._ensure_connected()
+                r = await self._measure_ppg(commands.PPG_TYPE_BLOOD_OXYGEN, window=timeout)
+            finally:
+                await self._release()
         spo2 = r["value"] if r else None
         nd = dict(self.data or {})
         if spo2:
@@ -313,8 +345,11 @@ class LefunCoordinator(DataUpdateCoordinator):
         """Experimental: cuff-less PPG estimate. This ring reports a SINGLE pressure value
         (~systolic); its 0x10 BP frame has no diastolic byte. Treat as indicative only."""
         async with self._lock:
-            await self._ensure_connected()
-            r = await self._measure_ppg(commands.PPG_TYPE_BLOOD_PRESSURE, window=timeout)
+            try:
+                await self._ensure_connected()
+                r = await self._measure_ppg(commands.PPG_TYPE_BLOOD_PRESSURE, window=timeout)
+            finally:
+                await self._release()
         if not r:
             return None
         self.async_set_updated_data({**(self.data or {}), "bp_systolic": r["value"]})
@@ -344,6 +379,8 @@ class LefunCoordinator(DataUpdateCoordinator):
             except Exception as err:  # noqa: BLE001 — never crash the service
                 _LOGGER.debug("sync failed: %s", err)
                 self._client = None
+            finally:
+                await self._release()
         self.async_set_updated_data(data)
         return data
 
@@ -454,29 +491,22 @@ class LefunCoordinator(DataUpdateCoordinator):
         # --- location: which proxy hears the ring (advert cache, no connection) ---
         self._recompute_location(data)
 
-        # --- battery/steps/HR: need a connection; poll on the first tick then every POLL_EVERY ---
+        # --- battery: needs a connection; poll every POLL_EVERY ticks. Until the FIRST battery
+        # read succeeds, retry only every 4th tick (~1 min) — retrying every 15s tick kept a
+        # slow/failing connect attempt in flight almost continuously after a restart, starving
+        # the room updates. Steps/activity/sleep reads were REMOVED from the poll: this ring
+        # has no working accelerometer, so they always came back empty and only lengthened the
+        # connected window (during which the ring can't advertise -> tracking goes dark).
+        # HR/SpO2 stay on-demand only (each is a ~30s PPG measure).
         self._poll_count += 1
-        if data.get("battery") is None or self._poll_count % POLL_EVERY == 0:
+        if ((data.get("battery") is None and self._poll_count % 4 == 1)
+                or self._poll_count % POLL_EVERY == 0):
             async with self._lock:
                 try:
                     await self._ensure_connected()
                     bat = await self._command_with_response(commands.CMD_BATTERY)
                     if bat is not None:
                         data["battery"] = commands.parse_battery(bat)
-                    # today's steps = SUM of the 0x13 intraday activity buckets. 0x12 is only a
-                    # finalized daily summary the firmware doesn't keep live (GB never polls it),
-                    # so a 0x12 daysAgo=0 poll reads 0 mid-day. Fall back to the 0x12 summary for
-                    # date/zero when the ring has no buckets yet today.
-                    buckets = await self._command_collect(commands.CMD_ACTIVITY, bytes([0]))
-                    day = commands.sum_activity(buckets)
-                    if day is None:
-                        summary = await self._command_with_response(commands.CMD_STEPS, bytes([0]))
-                        day = commands.parse_steps(summary) if summary else None
-                    if day:
-                        data.update({"steps": day["steps"],
-                                     "distance_m": day["distance_m"],
-                                     "calories": day["calories"],
-                                     "steps_date": day["date"]})
                     if data.get("firmware") is None:
                         info = await self._command_with_response(commands.CMD_DEVICE_INFO)
                         di = commands.parse_device_info(info) if info else None
@@ -484,18 +514,10 @@ class LefunCoordinator(DataUpdateCoordinator):
                             data["firmware"] = di["software_version"]
                             data["model_code"] = di["type_code"]
                             data["vendor_code"] = di["vendor_code"]
-                    # HR/SpO2 are NOT auto-measured here — each is a ~30s PPG measurement that
-                    # would make every poll (and first-refresh setup) crawl and drain the ring.
-                    # They're on-demand only (measure_heart_rate / measure_spo2 services/buttons).
-                    night = commands.summarize_sleep(
-                        await self._command_collect(commands.CMD_SLEEP, bytes([0])))
-                    if night:
-                        data.update({"sleep_total_min": night["total_min"],
-                                     "sleep_deep_min": night["deep_min"],
-                                     "sleep_light_min": night["light_min"],
-                                     "sleep_date": night["date"]})
                 except Exception as err:  # noqa: BLE001 - a flaky/failed BLE poll must never
                     # fail the coordinator; location still updates and sensors keep last value.
                     _LOGGER.debug("connected poll skipped: %s", err)
                     self._client = None
+                finally:
+                    await self._release()
         return data
