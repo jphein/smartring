@@ -21,6 +21,8 @@ views:
           - entity: input_boolean.ring_follow_lights
             name: Follow-me lighting (master)
             icon: mdi:lightbulb-auto
+          - entity: input_boolean.ring_follow_dark_only
+            name: Only when dark
           - entity: sensor.smart_ring_location
             name: Ring is in
             icon: mdi:map-marker
@@ -31,17 +33,29 @@ views:
             name: Last checked in
             icon: mdi:clock-check-outline
           - type: section
-            label: Rooms that follow the ring
+            label: Rooms that follow (radar ⊕ ring occupancy)
           - entity: input_boolean.ring_follow_laundry
+          - entity: binary_sensor.laundry_occupancy
+            name: "· Laundry occupied"
           - entity: input_boolean.ring_follow_kitchen
+          - entity: binary_sensor.kitchen_occupancy
+            name: "· Kitchen occupied"
           - entity: input_boolean.ring_follow_bedroom
+          - entity: binary_sensor.bedroom_occupancy
+            name: "· Bedroom occupied"
           - entity: input_boolean.ring_follow_luna_s_room
+          - entity: binary_sensor.lunas_room_occupancy
+            name: "· Luna's Room occupied"
           - entity: input_boolean.ring_follow_shed
+          - entity: binary_sensor.shed_occupancy
+            name: "· Shed occupied"
       - type: markdown
         content: >
-          _The room the ring is in turns its **Button Lights** on; leaving turns them off.
-          A room follows only when the master **and** its own toggle are on. Going "away"
-          (out of range) leaves lights as-is._
+          _Each room lights on its **occupancy** rising edge — mmWave radar (instant, when
+          plugged in) **or** the ring's room — and turns off ~2 min after the room clears.
+          Rooms manage themselves: manually-lit rooms elsewhere are never touched, and a
+          manual "off" sticks until the room clears and re-occupies. "Only when dark" gates
+          turning on, never turning off._
       - type: grid
         columns: 2
         square: false

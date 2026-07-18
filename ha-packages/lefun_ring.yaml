@@ -39,15 +39,48 @@ input_number:
     step: 1
     mode: box
 
-input_text:
-  # Last real room the follow-me automation processed. Lets us tell a genuine room CHANGE from
-  # an away-blip re-entry (the ring advertises sparsely, so "away for 20s -> same room" happens
-  # while you never moved) — re-entries must NOT re-light a room you manually darkened.
-  ring_prev_area:
-    name: Ring follow-me — previous area
-    icon: mdi:map-marker-path
+# ---------------------------------------------------------------------------------------------
+# FUSED presence: per-room occupancy = mmWave radar (instant, identity-blind, holds while still)
+# OR the ring's room (identity, covers radar-less rooms, slow ~5-60s). Radars that are unplugged
+# read 'unavailable' -> contribute nothing; plug one in and its room upgrades to instant-on with
+# no config change. Each room manages ITSELF (no cross-room reconcile), so manually-lit rooms
+# elsewhere are never touched, and a manual "off" sticks until the room actually clears and
+# re-occupies (lights fire only on the occupancy RISING edge).
+# ---------------------------------------------------------------------------------------------
+template:
+  - binary_sensor:
+      - name: Laundry occupancy
+        unique_id: fused_occupancy_laundry
+        device_class: occupancy
+        state: >-
+          {{ is_state('binary_sensor.laundry_radar_presence', 'on')
+             or states('sensor.smart_ring_location') in ['Laundry', 'Office'] }}
+      - name: Kitchen occupancy
+        unique_id: fused_occupancy_kitchen
+        device_class: occupancy
+        state: >-
+          {{ is_state('binary_sensor.kitchen_radar2_presence', 'on')
+             or is_state('sensor.smart_ring_location', 'Kitchen') }}
+      - name: Bedroom occupancy
+        unique_id: fused_occupancy_bedroom
+        device_class: occupancy
+        state: >-
+          {{ is_state('binary_sensor.bedroom_radar_presence', 'on')
+             or is_state('sensor.smart_ring_location', 'Bedroom') }}
+      - name: Lunas Room occupancy
+        unique_id: fused_occupancy_luna_s_room
+        device_class: occupancy
+        state: "{{ is_state('sensor.smart_ring_location', 'Lunas Room') }}"
+      - name: Shed occupancy
+        unique_id: fused_occupancy_shed
+        device_class: occupancy
+        state: "{{ is_state('sensor.smart_ring_location', 'Shed') }}"
 
 input_boolean:
+  # Only light rooms when the sun is down (occupancy still tracks; just no daytime lights).
+  ring_follow_dark_only:
+    name: Follow-me only when dark
+    icon: mdi:weather-night
   # Master switch for the whole follow-me behaviour.
   ring_follow_lights:
     name: Ring follow-me lighting
@@ -107,78 +140,64 @@ script:
           entity_id: "{{ room_lights }}"
 
 automation:
-  - id: ring_followme_lighting
-    alias: "Ring: follow-me lighting"
+  - id: fused_presence_lighting
+    alias: "Presence: fused room lighting (radar + ring)"
     mode: queued
     max_exceeded: silent
     triggers:
-      # Room changed. not_to also filters out attribute-only updates (the sensor's ages/rssi
-      # attrs refresh every 15s tick — without this the automation re-fires each tick).
+      # Rising edge -> light the room (instant when a radar drives it).
       - trigger: state
-        entity_id: sensor.smart_ring_location
-        not_to: ["unknown", "unavailable"]
-      # Master just enabled -> light up whatever room the ring is currently in.
-      - trigger: state
-        entity_id: input_boolean.ring_follow_lights
+        entity_id:
+          - binary_sensor.laundry_occupancy
+          - binary_sensor.kitchen_occupancy
+          - binary_sensor.bedroom_occupancy
+          - binary_sensor.lunas_room_occupancy
+          - binary_sensor.shed_occupancy
         to: "on"
+        id: occupied
+      # Cleared (debounced) -> lights off. Radar rooms clear on the radar's own timeout;
+      # ring-only rooms clear when the ring is seen elsewhere or goes away (~3 min cache).
+      - trigger: state
+        entity_id:
+          - binary_sensor.laundry_occupancy
+          - binary_sensor.kitchen_occupancy
+          - binary_sensor.bedroom_occupancy
+          - binary_sensor.lunas_room_occupancy
+          - binary_sensor.shed_occupancy
+        to: "off"
+        for: "00:02:00"
+        id: cleared
     conditions:
       - condition: state
         entity_id: input_boolean.ring_follow_lights
         state: "on"
     actions:
-      # Map the ring's nearest proxy -> HA area. Prefer an explicit table (ESPHome scanner names
-      # don't always match the HA device name); fall back to resolving the device by name.
       - variables:
-          proxy_area:
-            laundry-ble-proxy: laundry
-            laundry-ble-proxy-2: laundry
-            office-ble-proxy: laundry
-            kitchen-ble-proxy: kitchen
-            bedroom-ble-proxy: bedroom
-            shed-ble-proxy: shed
-            lunas-room-ble-proxy: luna_s_room
-          follow_areas: [laundry, kitchen, bedroom, luna_s_room, shed]
-      - variables:
-          new_proxy: "{{ (state_attr('sensor.smart_ring_location','proxy') or '').split(' (')[0] }}"
-      - variables:
-          new_area: >-
-            {% set dev = device_id(new_proxy) if new_proxy else none %}
-            {{ proxy_area.get(new_proxy, area_id(dev) if dev else none) }}
-      # Only act on a real room fix ("away"/unknown leaves lights alone, so sitting still —
-      # the ring sleeps and goes quiet — is safe).
+          area_map:
+            binary_sensor.laundry_occupancy: laundry
+            binary_sensor.kitchen_occupancy: kitchen
+            binary_sensor.bedroom_occupancy: bedroom
+            binary_sensor.lunas_room_occupancy: luna_s_room
+            binary_sensor.shed_occupancy: shed
+          area: "{{ area_map.get(trigger.entity_id) }}"
       - condition: template
-        value_template: "{{ new_area not in [none, ''] }}"
-      # Reconcile: turn OFF every OTHER enabled follow-me room, not just the one we came from.
-      # Self-healing — if a transition was missed (HA restart, reloads), the stale room gets
-      # cleaned up on the next trigger instead of staying lit forever.
-      - repeat:
-          for_each: "{{ follow_areas }}"
-          sequence:
-            - condition: template
-              value_template: >-
-                {{ repeat.item != new_area
-                   and is_state('input_boolean.ring_follow_' ~ repeat.item, 'on') }}
-            - action: script.ring_set_room_lights
-              data:
-                area: "{{ repeat.item }}"
-                turn: "off"
-      # Turn ON the room the ring is in — if its toggle is on, AND this is a genuine room
-      # change (or the master-toggle manual re-sync). An away-blip back into the SAME room
-      # (sparse ring adverts) must not re-light a room that was manually turned off.
-      - if:
-          - condition: template
-            value_template: >-
-              {{ is_state('input_boolean.ring_follow_' ~ new_area, 'on')
-                 and (trigger.entity_id == 'input_boolean.ring_follow_lights'
-                      or new_area != states('input_text.ring_prev_area')) }}
-        then:
+        value_template: >-
+          {{ area is not none
+             and is_state('input_boolean.ring_follow_' ~ area, 'on') }}
+      - choose:
+          - conditions: "{{ trigger.id == 'occupied' }}"
+            sequence:
+              # Dark-only gate applies to turning ON; turning off is always allowed.
+              - condition: template
+                value_template: >-
+                  {{ is_state('input_boolean.ring_follow_dark_only', 'off')
+                     or is_state('sun.sun', 'below_horizon') }}
+              - action: script.ring_set_room_lights
+                data:
+                  area: "{{ area }}"
+                  turn: "on"
+        default:
           - action: script.ring_set_room_lights
             data:
-              area: "{{ new_area }}"
-              turn: "on"
-      # Remember the room we just processed (survives restarts; away/unknown never gets here).
-      - action: input_text.set_value
-        target:
-          entity_id: input_text.ring_prev_area
-        data:
-          value: "{{ new_area }}"
+              area: "{{ area }}"
+              turn: "off"
