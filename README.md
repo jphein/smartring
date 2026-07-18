@@ -6,7 +6,7 @@
 ![Platform: Home Assistant](https://img.shields.io/badge/platform-Home%20Assistant-41BDF5.svg)
 ![No cloud](https://img.shields.io/badge/cloud-none-success.svg)
 
-This started as *"can I talk to this $15 ring without the ad-ware vendor app?"* and turned
+This started as *"can I talk to this $10 ring without the ad-ware vendor app?"* and turned
 into a whole-home, identity-aware **follow-me lighting** system. Everything runs locally —
 no cloud, no vendor app, no phone required.
 
